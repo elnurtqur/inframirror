@@ -9,7 +9,7 @@ import time
 import logging
 from datetime import datetime
 from typing import Dict, List, Any, Optional
-
+import asyncio
 import requests
 import urllib3
 from pymongo import MongoClient
@@ -469,3 +469,103 @@ class JiraPosterService:
                 'message': f'Retry error: {str(e)}',
                 'processed': 0
             }
+
+# app/services/jira_poster_service.py
+
+def process_selected_vms(self, vm_ids: List[str], delay: float = 1.0) -> Dict[str, Any]:
+    """Process specific selected VMs and POST them to Jira"""
+    try:
+        # Get VMs by IDs from database
+        from app.services.database_service import DatabaseService
+        import asyncio
+        
+        db_service = DatabaseService()
+        selected_vms = asyncio.run(db_service.get_vms_by_ids(vm_ids))
+        
+        if not selected_vms:
+            return {
+                'status': 'error',
+                'message': 'No VMs found with provided IDs',
+                'processed': 0,
+                'successful': 0,
+                'failed': 0
+            }
+        
+        logger.info(f"📋 Processing {len(selected_vms)} selected VMs for Jira posting")
+        
+        # Statistics
+        stats = {
+            'status': 'success',
+            'processed': 0,
+            'successful': 0,
+            'failed': 0,
+            'results': [],
+            'start_time': datetime.utcnow(),
+            'processing_time': 0
+        }
+        
+        start_time = time.time()
+        
+        # Process each selected VM
+        for i, vm_doc in enumerate(selected_vms, 1):
+            vm_name = vm_doc.get('vm_name', 'Unknown')
+            
+            logger.info(f"📤 [{i}/{len(selected_vms)}] Processing selected VM: {vm_name}")
+            
+            # POST to Jira
+            post_result = self.post_vm_to_jira(vm_doc)
+            
+            stats['processed'] += 1
+            
+            if post_result['success']:
+                stats['successful'] += 1
+                self.move_to_completed(vm_doc, post_result)
+                
+                stats['results'].append({
+                    'vm_name': vm_name,
+                    'status': 'success',
+                    'object_key': post_result.get('object_key'),
+                    'message': f"Created as {post_result.get('object_key')}"
+                })
+                
+            else:
+                stats['failed'] += 1
+                self.mark_as_failed(vm_doc, post_result)
+                
+                stats['results'].append({
+                    'vm_name': vm_name,
+                    'status': 'failed',
+                    'error': post_result.get('error'),
+                    'status_code': post_result.get('status_code'),
+                    'message': f"Failed: {post_result.get('error')}"
+                })
+            
+            # Apply rate limiting delay
+            if i < len(selected_vms) and delay > 0:
+                time.sleep(delay)
+        
+        # Calculate final statistics
+        end_time = time.time()
+        stats['processing_time'] = end_time - start_time
+        
+        logger.info("=" * 50)
+        logger.info("SELECTED VMs JIRA POSTER RESULTS:")
+        logger.info(f"Selected VMs: {len(selected_vms)}")
+        logger.info(f"Successful POSTs: {stats['successful']}")
+        logger.info(f"Failed POSTs: {stats['failed']}")
+        logger.info(f"Processing time: {stats['processing_time']:.2f} seconds")
+        logger.info("=" * 50)
+        
+        return stats
+        
+    except Exception as e:
+        logger.error(f"Error processing selected VMs: {e}")
+        return {
+            'status': 'error',
+            'message': f'Processing error: {str(e)}',
+            'processed': 0,
+            'successful': 0,
+            'failed': 0,
+            'results': []
+        }
+    

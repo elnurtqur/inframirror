@@ -519,3 +519,36 @@ class FailedAssetListResponse(BaseModel):
     message: str
     total_count: int
     assets: List[FailedJiraAsset]
+
+
+class SelectedVMsPosterRequest(BaseModel):
+    """Selected VMs poster request model"""
+    jira_config: Optional[JiraPosterConfig] = None
+    vm_ids: List[str] = Field(..., description="List of VM IDs to post")
+    delay_seconds: Optional[float] = Field(1.0, ge=0.0, le=10.0)
+
+class SelectableVM(BaseModel):
+    """Selectable VM model with checkbox state"""
+    id: str
+    vm_name: str
+    jira_asset_payload: Dict[str, Any]
+    vm_summary: Dict[str, Any]
+    debug_info: Optional[Dict[str, Any]] = None
+    status: str = "pending_creation"
+    created_date: datetime = Field(default_factory=datetime.utcnow)
+    selected: bool = False
+    can_post: bool = True
+    source: str = "vcenter_diff_processor"
+
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            datetime: lambda dt: dt.isoformat()
+        }
+
+class SelectableVMListResponse(BaseModel):
+    """Selectable VM list response"""
+    status: str
+    message: str
+    total_count: int
+    vms: List[SelectableVM]

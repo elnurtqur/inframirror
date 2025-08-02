@@ -631,3 +631,60 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"Jira poster statistics error: {e}")
             return {}
+
+async def get_missing_vms_with_ids(self, skip: int = 0, limit: int = 1000) -> List[Dict[str, Any]]:
+    """Get missing VMs with ObjectId for selection - FIXED VERSION"""
+    try:
+        vcenter_collection = await get_async_collection()
+        client = vcenter_collection.database.client
+        missing_collection = client[settings.mongodb_database]['missing_vms_for_jira']
+        
+        # Get missing VMs with pagination
+        cursor = missing_collection.find({}).skip(skip).limit(limit).sort('created_date', -1)
+        vms = await cursor.to_list(length=limit)
+        
+        # Include ObjectId as string for frontend
+        for vm in vms:
+            vm['id'] = str(vm['_id'])
+            # Keep _id for internal use, but add id for frontend
+        
+        logger.info(f"Retrieved {len(vms)} missing VMs with IDs")
+        return vms
+        
+    except Exception as e:
+        logger.error(f"Error retrieving selectable missing VMs: {e}")
+        logger.exception("Full traceback:")
+        return []
+
+async def get_vms_by_ids(self, vm_ids: List[str]) -> List[Dict[str, Any]]:
+    """Get specific VMs by their IDs - FIXED VERSION"""
+    try:
+        from bson import ObjectId
+        vcenter_collection = await get_async_collection()
+        client = vcenter_collection.database.client
+        missing_collection = client[settings.mongodb_database]['missing_vms_for_jira']
+        
+        # Convert string IDs to ObjectIds
+        object_ids = []
+        for vm_id in vm_ids:
+            try:
+                object_ids.append(ObjectId(vm_id))
+            except Exception as e:
+                logger.warning(f"Invalid ObjectId: {vm_id} - {e}")
+                continue
+        
+        if not object_ids:
+            logger.warning("No valid ObjectIds found")
+            return []
+            
+        # Find VMs by ObjectIds
+        cursor = missing_collection.find({'_id': {'$in': object_ids}})
+        vms = await cursor.to_list(length=len(object_ids))
+        
+        logger.info(f"Retrieved {len(vms)} VMs by IDs from {len(vm_ids)} requested")
+        return vms
+        
+    except Exception as e:
+        logger.error(f"Error retrieving VMs by IDs: {e}")
+        logger.exception("Full traceback:")
+        return []

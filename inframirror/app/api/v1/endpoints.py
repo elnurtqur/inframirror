@@ -19,7 +19,10 @@ from app.models.models import (
     DiffProcessRequest,
     DiffProcessResponse,
     MissingVM,
-    MissingVMListResponse
+    MissingVMListResponse,
+    SelectedVMsPosterRequest,
+    SelectableVM,
+    SelectableVMListResponse
 )
 from app.services.processing_service import ProcessingService
 from app.services.jira_processing_service import JiraProcessingService
@@ -1146,4 +1149,171 @@ async def get_all_jira_vms_from_db(
         raise HTTPException(
             status_code=500,
             detail=f"Error retrieving Jira VMs: {str(e)}"
+        )
+    
+# app/api/v1/endpoints.py
+
+@router.get("/get-missing-vms-with-selection", response_model=SelectableVMListResponse)
+async def get_missing_vms_with_selection(
+    skip: int = Query(0, ge=0, description="Number of VMs to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of VMs")
+):
+    """
+    Get missing VMs with selection capabilities
+    """
+    try:
+        logger.info(f"Retrieving selectable missing VMs (skip={skip}, limit={limit})")
+        
+        vms = await database_service.get_missing_vms_with_ids(skip, limit)
+        total_count = await database_service.get_missing_vm_count()
+        
+        # Convert to SelectableVM models
+        vm_models = []
+        for vm_data in vms:
+            try:
+                selectable_vm = SelectableVM(
+                    id=vm_data['id'],
+                    vm_name=vm_data.get('vm_name', 'Unknown'),
+                    jira_asset_payload=vm_data.get('jira_asset_payload', {}),
+                    vm_summary=vm_data.get('vm_summary', {}),
+                    status=vm_data.get('status', 'pending_creation'),
+                    created_date=vm_data.get('created_date', datetime.utcnow()),
+                    selected=False,
+                    can_post=vm_data.get('status') == 'pending_creation'
+                )
+                vm_models.append(selectable_vm)
+            except Exception as e:
+                logger.warning(f"SelectableVM model conversion error: {e}")
+                continue
+        
+        logger.info(f"Retrieved {len(vm_models)} selectable missing VMs")
+        
+        return SelectableVMListResponse(
+            status="success",
+            message=f"Retrieved {len(vm_models)} selectable missing VMs",
+            total_count=total_count,
+            vms=vm_models
+        )
+        
+    except Exception as e:
+        logger.error(f"Error retrieving selectable missing VMs: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving selectable missing VMs: {str(e)}"
+        )
+
+
+@router.get("/get-missing-vms-with-selection", response_model=SelectableVMListResponse)
+async def get_missing_vms_with_selection(
+    skip: int = Query(0, ge=0, description="Number of VMs to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of VMs")
+):
+    """
+    Get missing VMs with selection capabilities
+    """
+    try:
+        logger.info(f"Retrieving selectable missing VMs (skip={skip}, limit={limit})")
+        
+        vms = await database_service.get_missing_vms_with_ids(skip, limit)
+        total_count = await database_service.get_missing_vm_count()
+        
+        # Convert to SelectableVM models
+        vm_models = []
+        for vm_data in vms:
+            try:
+                selectable_vm = SelectableVM(
+                    id=vm_data.get('id', str(vm_data.get('_id', ''))),
+                    vm_name=vm_data.get('vm_name', 'Unknown'),
+                    jira_asset_payload=vm_data.get('jira_asset_payload', {}),
+                    vm_summary=vm_data.get('vm_summary', {}),
+                    debug_info=vm_data.get('debug_info', {}),
+                    status=vm_data.get('status', 'pending_creation'),
+                    created_date=vm_data.get('created_date', datetime.utcnow()),
+                    selected=False,
+                    can_post=vm_data.get('status') == 'pending_creation',
+                    source=vm_data.get('source', 'vcenter_diff_processor')
+                )
+                vm_models.append(selectable_vm)
+            except Exception as e:
+                logger.warning(f"SelectableVM model conversion error: {e}")
+                continue
+        
+        logger.info(f"Retrieved {len(vm_models)} selectable missing VMs")
+        
+        return SelectableVMListResponse(
+            status="success",
+            message=f"Retrieved {len(vm_models)} selectable missing VMs",
+            total_count=total_count,
+            vms=vm_models
+        )
+        
+    except Exception as e:
+        logger.error(f"Error retrieving selectable missing VMs: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving selectable missing VMs: {str(e)}"
+        )
+
+
+@router.post("/post-selected-vms-to-jira", response_model=JiraPosterResponse)
+async def post_selected_vms_to_jira(
+    background_tasks: BackgroundTasks,
+    request: SelectedVMsPosterRequest
+):
+    """
+    Post specific selected VMs to Jira Asset Management
+    """
+    try:
+        logger.info(f"Selected VMs Jira Asset posting started for {len(request.vm_ids)} VMs")
+        
+        if not request.vm_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="No VM IDs provided"
+            )
+        
+        # Extract Jira configuration
+        jira_config = {}
+        if request.jira_config:
+            jira_config = {
+                'jira_token': request.jira_config.jira_token,
+                'create_url': request.jira_config.create_url,
+                'delay_seconds': request.jira_config.delay_seconds or 1.0
+            }
+        
+        # Create Jira Poster service
+        poster_service = JiraPosterService(
+            jira_token=jira_config.get('jira_token'),
+            create_url=jira_config.get('create_url')
+        )
+        
+        # Process selected VMs
+        result = poster_service.process_selected_vms(
+            vm_ids=request.vm_ids,
+            delay=request.delay_seconds or 1.0
+        )
+        
+        if result['status'] == 'success':
+            return JiraPosterResponse(
+                status="success",
+                message=f"{result['successful']} selected VMs posted successfully to Jira, {result['failed']} failed",
+                processed=result['processed'],
+                successful=result['successful'],
+                failed=result['failed'],
+                processing_time=result.get('processing_time'),
+                results=result.get('results', [])
+            )
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=result.get('message', 'Unknown error occurred')
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Selected VMs Jira Asset posting error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Selected VMs Jira Asset posting error: {str(e)}"
         )
