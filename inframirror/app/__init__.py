@@ -1,0 +1,3 @@
+"""
+VMware Collector FastAPI Application
+"""
