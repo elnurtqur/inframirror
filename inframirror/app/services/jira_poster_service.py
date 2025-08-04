@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 class JiraPosterService:
     """Service for posting VM payloads to Jira Asset Management"""
     
-    def __init__(self, jira_token: str = None, create_url: str = None):
+    def __init__(self, jira_token: str = None, create_url: str = None, object_type_id: str = None, object_schema_id: str = None):
         """Initialize Jira Poster Service
         
         Args:
@@ -36,11 +36,15 @@ class JiraPosterService:
         """
         self.jira_token = jira_token or "your_token_here"
         self.create_url = create_url or "https://jira-support.company.com/rest/insight/1.0/object/create"
+        self.object_type_id = object_type_id or "3191"
+        self.object_schema_id = object_schema_id or "242"
         self.session = None
         
         # Get MongoDB collections
         self.missing_collection = None
         self.completed_collection = None
+
+        logger.info(f"JiraPosterService initialized with ObjectType: {self.object_type_id}, Schema: {self.object_schema_id}")
         
     def get_collections(self):
         """Get MongoDB collections for missing and completed VMs"""
@@ -470,102 +474,127 @@ class JiraPosterService:
                 'processed': 0
             }
 
-# app/services/jira_poster_service.py
 
-def process_selected_vms(self, vm_ids: List[str], delay: float = 1.0) -> Dict[str, Any]:
-    """Process specific selected VMs and POST them to Jira"""
-    try:
-        # Get VMs by IDs from database
-        from app.services.database_service import DatabaseService
-        import asyncio
-        
-        db_service = DatabaseService()
-        selected_vms = asyncio.run(db_service.get_vms_by_ids(vm_ids))
-        
-        if not selected_vms:
-            return {
-                'status': 'error',
-                'message': 'No VMs found with provided IDs',
+    def process_selected_vms(self, vm_ids: List[str], delay: float = 1.0) -> Dict[str, Any]:
+        """Process specific selected VMs and POST them to Jira"""
+        try:
+            # Get VMs by IDs from database
+            import asyncio
+            from bson import ObjectId
+            
+            logger.info(f"Processing {len(vm_ids)} selected VMs for Jira posting")
+            
+            # Get collections
+            self.get_collections()
+            
+            # Convert string IDs to ObjectIds and get VMs
+            object_ids = []
+            for vm_id in vm_ids:
+                try:
+                    object_ids.append(ObjectId(vm_id))
+                except Exception as e:
+                    logger.warning(f"Invalid ObjectId: {vm_id} - {e}")
+                    continue
+            
+            if not object_ids:
+                return {
+                    'status': 'error',
+                    'message': 'No valid VM IDs provided',
+                    'processed': 0,
+                    'successful': 0,
+                    'failed': 0,
+                    'results': []
+                }
+            
+            # Find VMs by ObjectIds
+            selected_vms = list(self.missing_collection.find({'_id': {'$in': object_ids}}))
+            
+            if not selected_vms:
+                return {
+                    'status': 'error',
+                    'message': 'No VMs found with provided IDs',
+                    'processed': 0,
+                    'successful': 0,
+                    'failed': 0,
+                    'results': []
+                }
+            
+            logger.info(f"Found {len(selected_vms)} VMs to process")
+            
+            # Statistics
+            stats = {
+                'status': 'success',
                 'processed': 0,
                 'successful': 0,
-                'failed': 0
+                'failed': 0,
+                'results': [],
+                'start_time': datetime.utcnow(),
+                'processing_time': 0
             }
-        
-        logger.info(f"📋 Processing {len(selected_vms)} selected VMs for Jira posting")
-        
-        # Statistics
-        stats = {
-            'status': 'success',
-            'processed': 0,
-            'successful': 0,
-            'failed': 0,
-            'results': [],
-            'start_time': datetime.utcnow(),
-            'processing_time': 0
-        }
-        
-        start_time = time.time()
-        
-        # Process each selected VM
-        for i, vm_doc in enumerate(selected_vms, 1):
-            vm_name = vm_doc.get('vm_name', 'Unknown')
             
-            logger.info(f"📤 [{i}/{len(selected_vms)}] Processing selected VM: {vm_name}")
+            start_time = time.time()
             
-            # POST to Jira
-            post_result = self.post_vm_to_jira(vm_doc)
-            
-            stats['processed'] += 1
-            
-            if post_result['success']:
-                stats['successful'] += 1
-                self.move_to_completed(vm_doc, post_result)
+            # Process each selected VM
+            for i, vm_doc in enumerate(selected_vms, 1):
+                vm_name = vm_doc.get('vm_name', 'Unknown')
                 
-                stats['results'].append({
-                    'vm_name': vm_name,
-                    'status': 'success',
-                    'object_key': post_result.get('object_key'),
-                    'message': f"Created as {post_result.get('object_key')}"
-                })
+                logger.info(f"📤 [{i}/{len(selected_vms)}] Processing selected VM: {vm_name}")
                 
-            else:
-                stats['failed'] += 1
-                self.mark_as_failed(vm_doc, post_result)
+                # POST to Jira
+                post_result = self.post_vm_to_jira(vm_doc)
                 
-                stats['results'].append({
-                    'vm_name': vm_name,
-                    'status': 'failed',
-                    'error': post_result.get('error'),
-                    'status_code': post_result.get('status_code'),
-                    'message': f"Failed: {post_result.get('error')}"
-                })
+                stats['processed'] += 1
+                
+                if post_result['success']:
+                    stats['successful'] += 1
+                    self.move_to_completed(vm_doc, post_result)
+                    
+                    stats['results'].append({
+                        'vm_name': vm_name,
+                        'status': 'success',
+                        'object_key': post_result.get('object_key'),
+                        'message': f"Created as {post_result.get('object_key')}"
+                    })
+                    
+                else:
+                    stats['failed'] += 1
+                    self.mark_as_failed(vm_doc, post_result)
+                    
+                    stats['results'].append({
+                        'vm_name': vm_name,
+                        'status': 'failed',
+                        'error': post_result.get('error'),
+                        'status_code': post_result.get('status_code'),
+                        'message': f"Failed: {post_result.get('error')}"
+                    })
+                
+                # Apply rate limiting delay
+                if i < len(selected_vms) and delay > 0:
+                    time.sleep(delay)
             
-            # Apply rate limiting delay
-            if i < len(selected_vms) and delay > 0:
-                time.sleep(delay)
-        
-        # Calculate final statistics
-        end_time = time.time()
-        stats['processing_time'] = end_time - start_time
-        
-        logger.info("=" * 50)
-        logger.info("SELECTED VMs JIRA POSTER RESULTS:")
-        logger.info(f"Selected VMs: {len(selected_vms)}")
-        logger.info(f"Successful POSTs: {stats['successful']}")
-        logger.info(f"Failed POSTs: {stats['failed']}")
-        logger.info(f"Processing time: {stats['processing_time']:.2f} seconds")
-        logger.info("=" * 50)
-        
-        return stats
-        
-    except Exception as e:
-        logger.error(f"Error processing selected VMs: {e}")
-        return {
-            'status': 'error',
-            'message': f'Processing error: {str(e)}',
-            'processed': 0,
-            'successful': 0,
-            'failed': 0,
-            'results': []
-        }
+            # Calculate final statistics
+            end_time = time.time()
+            stats['processing_time'] = end_time - start_time
+            
+            logger.info("=" * 50)
+            logger.info("SELECTED VMs JIRA POSTER RESULTS:")
+            logger.info(f"Selected VMs: {len(selected_vms)}")
+            logger.info(f"Successful POSTs: {stats['successful']}")
+            logger.info(f"Failed POSTs: {stats['failed']}")
+            logger.info(f"Processing time: {stats['processing_time']:.2f} seconds")
+            logger.info("=" * 50)
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"Error processing selected VMs: {e}")
+            logger.exception("Full traceback:")
+            return {
+                'status': 'error',
+                'message': f'Processing error: {str(e)}',
+                'processed': 0,
+                'successful': 0,
+                'failed': 0,
+                'results': []
+            }
     

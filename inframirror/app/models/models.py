@@ -386,6 +386,8 @@ class DiffProcessResponse(BaseModel):
     processed_missing_vms: Optional[int] = None
     errors: Optional[int] = None
     processing_time: Optional[float] = None
+    object_type_id: Optional[str] = None
+    object_schema_id: Optional[str] = None
 
 
 class BatchResult(BaseModel):
@@ -412,6 +414,9 @@ class JiraPosterConfig(BaseModel):
         "https://jira-support.company.com/rest/insight/1.0/object/create",
         description="Jira Asset API endpoint for creating objects"
     )
+    object_type_id: Optional[str] = Field("3191", description="VM Object Type ID in Jira Asset")
+    object_schema_id: Optional[str] = Field("242", description="Object Schema ID in Jira Asset")
+
     delay_seconds: Optional[float] = Field(1.0, ge=0.0, le=10.0, description="Delay between requests")
 
 
@@ -435,18 +440,18 @@ class JiraPosterResponse(BaseModel):
 
 
 class CompletedJiraAsset(BaseModel):
-    """Completed Jira Asset model"""
+    """Completed Jira Asset model - FIXED ObjectId VERSION"""
     vm_name: str
     jira_object_key: Optional[str] = None
-    jira_asset_payload: Dict[str, Any]
-    vm_summary: Dict[str, Any]
-    debug_info: Dict[str, Any]
+    jira_asset_payload: Dict[str, Any] = Field(default_factory=dict)
+    vm_summary: Dict[str, Any] = Field(default_factory=dict)
+    debug_info: Dict[str, Any] = Field(default_factory=dict)
     
     # Processing info
     status: str = "completed"
     jira_post_date: datetime = Field(default_factory=datetime.utcnow)
     processing_completed: bool = True
-    original_id: Optional[str] = None
+    original_id: Optional[str] = None  # ✅ FIXED: Make optional and ensure string
     
     # Jira response
     jira_response: Optional[Dict[str, Any]] = None
@@ -460,6 +465,27 @@ class CompletedJiraAsset(BaseModel):
         json_encoders = {
             datetime: lambda dt: dt.isoformat()
         }
+    
+    # ✅ ADD: Validator to handle ObjectId conversion
+    @validator('original_id', pre=True)
+    def validate_original_id(cls, v):
+        if v is None:
+            return None
+        # Convert ObjectId to string
+        return str(v)
+    
+    @validator('jira_post_date', 'created_date', pre=True)
+    def validate_dates(cls, v):
+        if v is None:
+            return datetime.utcnow()
+        if isinstance(v, datetime):
+            return v
+        if isinstance(v, str):
+            try:
+                return datetime.fromisoformat(v.replace('Z', '+00:00'))
+            except:
+                return datetime.utcnow()
+        return datetime.utcnow()
 
 
 class FailedJiraAsset(BaseModel):
@@ -526,6 +552,8 @@ class SelectedVMsPosterRequest(BaseModel):
     jira_config: Optional[JiraPosterConfig] = None
     vm_ids: List[str] = Field(..., description="List of VM IDs to post")
     delay_seconds: Optional[float] = Field(1.0, ge=0.0, le=10.0)
+    retry_failed: Optional[bool] = Field(False, description="Retry previously failed VMs")
+    max_retries: Optional[int] = Field(3, ge=1, le=10, description="Maximum retry attempts")
 
 class SelectableVM(BaseModel):
     """Selectable VM model with checkbox state"""
@@ -552,3 +580,38 @@ class SelectableVMListResponse(BaseModel):
     message: str
     total_count: int
     vms: List[SelectableVM]
+
+
+# ✅ NEW MODEL: Custom payload request
+class CustomPayloadRequest(BaseModel):
+    """Custom Jira payload request model"""
+    jira_config: Optional[JiraPosterConfig] = None
+    payload: Dict[str, Any] = Field(..., description="Custom Jira Asset payload")
+    vm_name: Optional[str] = Field("custom-vm", description="VM name for tracking")
+
+
+# ✅ NEW MODEL: Environment configuration
+class EnvironmentConfig(BaseModel):
+    """Environment-specific configuration model"""
+    environment: str = Field("production", description="Environment name")
+    object_type_id: Optional[str] = Field(None, description="Override Object Type ID")
+    object_schema_id: Optional[str] = Field(None, description="Override Object Schema ID")
+    description: Optional[str] = Field(None, description="Environment description")
+
+
+# ✅ NEW MODEL: Configuration test request
+class ConfigTestRequest(BaseModel):
+    """Configuration test request model"""
+    jira_config: JiraConfig
+    test_object_creation: Optional[bool] = Field(False, description="Test actual object creation")
+
+
+class ConfigTestResponse(BaseModel):
+    """Configuration test response model"""
+    status: str
+    message: str
+    object_type_name: Optional[str] = None
+    object_type_id: Optional[str] = None
+    schema_id: Optional[str] = None
+    config_used: Optional[Dict[str, Any]] = None
+    test_results: Optional[Dict[str, Any]] = None

@@ -1,5 +1,26 @@
 import React, { useState, useEffect } from 'react';
-import { RefreshCw, Database, Activity, AlertCircle, CheckCircle, Clock, Server, HardDrive, Eye, Search, Filter, Settings, ChevronUp, ChevronDown, Power, PowerOff, Pause, ChevronLeft, ChevronRight } from 'lucide-react';
+import { 
+  RefreshCw, 
+  Database, 
+  Activity, 
+  AlertCircle, 
+  CheckCircle, 
+  Clock, 
+  Server, 
+  HardDrive, 
+  Eye, 
+  Search, 
+  Filter, 
+  Settings, 
+  ChevronUp, 
+  ChevronDown, 
+  Power, 
+  PowerOff, 
+  Pause, 
+  ChevronLeft, 
+  ChevronRight,
+  X
+} from 'lucide-react';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -10,6 +31,7 @@ const VMwareCollectorApp = () => {
     jiraStats: null,
     collectionStatus: null,
     missingVMs: [],
+    totalMissingCount: 0,
     completedAssets: [],
     failedAssets: [],
     vcenterVMs: [],
@@ -35,6 +57,9 @@ const VMwareCollectorApp = () => {
   const [selectAll, setSelectAll] = useState(false);
   const [showPostingModal, setShowPostingModal] = useState(false);
   
+  // Missing VMs specific states
+  const [statusFilter, setStatusFilter] = useState('all');
+
   const [config, setConfig] = useState({
     jira: {
       api_url: 'https://jira-support.company.com/rest/insight/1.0/object/navlist/iql',
@@ -347,21 +372,96 @@ const VMwareCollectorApp = () => {
     setCurrentPage(1);
   };
 
-  // Load missing VMs
+  // Enhanced load missing VMs function
   const loadMissingVMs = async () => {
+    setLoading(prev => ({...prev, missingVMs: true}));
     try {
-      const response = await apiCall('/api/v1/get-missing-vms-with-selection?limit=100');
-      setData(prev => ({...prev, missingVMs: response.vms || []}));
-      addLog(`Loaded ${response.vms?.length || 0} missing VMs`, 'success');
+      const skip = (currentPage - 1) * itemsPerPage;
+      const response = await apiCall(`/api/v1/get-missing-vms-with-selection?skip=${skip}&limit=${itemsPerPage}`);
+      
+      let filteredVMs = response.vms || [];
+      
+      // Apply client-side filtering
+      if (searchTerm) {
+        filteredVMs = filteredVMs.filter(vm => {
+          const vmName = vm.vm_name?.toLowerCase() || '';
+          const vmIP = vm.vm_summary?.ip?.toLowerCase() || '';
+          const search = searchTerm.toLowerCase();
+          return vmName.includes(search) || vmIP.includes(search);
+        });
+      }
+      
+      if (statusFilter !== 'all') {
+        filteredVMs = filteredVMs.filter(vm => vm.status === statusFilter);
+      }
+      
+      // Apply sorting
+      filteredVMs.sort((a, b) => {
+        let aVal = a[sortField];
+        let bVal = b[sortField];
+        
+        if (sortField === 'created_date') {
+          aVal = new Date(aVal || 0);
+          bVal = new Date(bVal || 0);
+        } else if (typeof aVal === 'string') {
+          aVal = (aVal || '').toLowerCase();
+          bVal = (bVal || '').toLowerCase();
+        }
+        
+        if (sortDirection === 'asc') {
+          return aVal > bVal ? 1 : -1;
+        } else {
+          return aVal < bVal ? 1 : -1;
+        }
+      });
+      
+      setData(prev => ({
+        ...prev,
+        missingVMs: filteredVMs,
+        totalMissingCount: response.total_count || 0
+      }));
+      
+      addLog(`Loaded ${filteredVMs.length} missing VMs`, 'success');
+      
       // Reset selections when data changes
       setSelectedVMIds(new Set());
       setSelectAll(false);
+      
     } catch (error) {
       addLog('Failed to load missing VMs', 'error');
+    } finally {
+      setLoading(prev => ({...prev, missingVMs: false}));
     }
   };
 
-  // Post selected VMs to Jira
+  // Enhanced VM selection handlers
+  const handleVMSelection = (vmId, isSelected) => {
+    const newSelected = new Set(selectedVMIds);
+    if (isSelected) {
+      newSelected.add(vmId);
+    } else {
+      newSelected.delete(vmId);
+    }
+    setSelectedVMIds(newSelected);
+    
+    // Update select all state
+    const selectableVMs = data.missingVMs.filter(vm => vm.status === 'pending_creation');
+    setSelectAll(newSelected.size === selectableVMs.length && selectableVMs.length > 0);
+  };
+
+  const handleSelectAll = (isSelected) => {
+    const selectableVMs = data.missingVMs.filter(vm => vm.status === 'pending_creation');
+    
+    if (isSelected) {
+      const allIds = new Set(selectableVMs.map(vm => vm.id));
+      setSelectedVMIds(allIds);
+    } else {
+      setSelectedVMIds(new Set());
+    }
+    setSelectAll(isSelected);
+  };
+
+  // Enhanced posting function
   const postSelectedVMsToJira = async () => {
     if (selectedVMIds.size === 0) {
       addLog('No VMs selected for posting', 'warning');
@@ -386,11 +486,21 @@ const VMwareCollectorApp = () => {
       });
       
       addLog(`Selected VMs posting completed: ${response.successful} successful, ${response.failed} failed`, 
-             response.failed > 0 ? 'warning' : 'success');
+            response.failed > 0 ? 'warning' : 'success');
+      
+      // Show detailed results
+      if (response.results && response.results.length > 0) {
+        response.results.forEach(result => {
+          if (result.status === 'success') {
+            addLog(`✅ ${result.vm_name} created as ${result.object_key}`, 'success');
+          } else {
+            addLog(`❌ ${result.vm_name} failed: ${result.error}`, 'error');
+          }
+        });
+      }
       
       // Refresh data and reset selections
-      loadMissingVMs();
-      loadDashboardData();
+      await loadMissingVMs();
       setShowPostingModal(false);
       
     } catch (error) {
@@ -398,31 +508,6 @@ const VMwareCollectorApp = () => {
     } finally {
       setLoading(prev => ({...prev, selectedJiraPost: false}));
     }
-  };
-
-  // Handle individual VM selection
-  const handleVMSelection = (vmId, isSelected) => {
-    const newSelected = new Set(selectedVMIds);
-    if (isSelected) {
-      newSelected.add(vmId);
-    } else {
-      newSelected.delete(vmId);
-    }
-    setSelectedVMIds(newSelected);
-    
-    // Update select all state
-    setSelectAll(newSelected.size === data.missingVMs.length && data.missingVMs.length > 0);
-  };
-
-  // Handle select all
-  const handleSelectAll = (isSelected) => {
-    if (isSelected) {
-      const allIds = new Set(data.missingVMs.filter(vm => vm.status === 'pending_creation').map(vm => vm.id));
-      setSelectedVMIds(allIds);
-    } else {
-      setSelectedVMIds(new Set());
-    }
-    setSelectAll(isSelected);
   };
 
   // Load completed assets
@@ -445,6 +530,11 @@ const VMwareCollectorApp = () => {
     }
   };
 
+  // Initial load
+  useEffect(() => {
+    loadDashboardData();
+  }, []);
+
   // Load VMs when dependencies change
   useEffect(() => {
     if (activeTab === 'vm-summary') {
@@ -457,13 +547,17 @@ const VMwareCollectorApp = () => {
     }
   }, [vmDataSource, currentPage, itemsPerPage, activeTab]);
 
-  // Initial load
+  // Apply filters/search with debounce
   useEffect(() => {
-    loadDashboardData();
-    loadMissingVMs();
-    loadCompletedAssets();
-    loadFailedAssets();
-  }, []);
+    const timer = setTimeout(() => {
+      if (activeTab === 'missing-vms') {
+        setCurrentPage(1);
+        loadMissingVMs();
+      }
+    }, 500);
+    
+    return () => clearTimeout(timer);
+  }, [searchTerm, statusFilter, sortField, sortDirection]);
 
   const LoadingButton = ({ loading, onClick, children, variant = 'primary' }) => {
     const baseClasses = "px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors disabled:opacity-50";
@@ -951,116 +1045,6 @@ const VMwareCollectorApp = () => {
                 </div>
               </div>
             </div>
-
-            {/* Quick Actions Panel */}
-            <div className="bg-white rounded-lg shadow-sm border">
-              <div className="p-6 border-b">
-                <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                  <RefreshCw className="w-5 h-5 text-blue-600" />
-                  Quick Actions
-                </h3>
-                <p className="text-sm text-gray-600 mt-1">Common operations for system maintenance</p>
-              </div>
-
-              <div className="p-6">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {/* Full Sync */}
-                  <div className="p-4 border border-gray-200 rounded-lg hover:border-blue-300 transition-colors">
-                    <h4 className="font-medium text-gray-900 mb-2">🔄 Full Synchronization</h4>
-                    <p className="text-sm text-gray-600 mb-3">Run complete workflow: collect, analyze, and sync</p>
-                    <button
-                      onClick={async () => {
-                        addLog('Starting full synchronization workflow...', 'info');
-                        await collectVCenterVMs();
-                        await collectJiraVMs();
-                        await processVMDiff();
-                      }}
-                      disabled={loading.vcenter || loading.jira || loading.diff}
-                      className="w-full px-3 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-                    >
-                      Start Full Sync
-                    </button>
-                  </div>
-
-                  {/* Refresh Data */}
-                  <div className="p-4 border border-gray-200 rounded-lg hover:border-green-300 transition-colors">
-                    <h4 className="font-medium text-gray-900 mb-2">📊 Refresh Dashboard</h4>
-                    <p className="text-sm text-gray-600 mb-3">Update statistics and current status</p>
-                    <LoadingButton
-                      loading={loading.dashboard}
-                      onClick={loadDashboardData}
-                      variant="success"
-                    >
-                      <RefreshCw className="w-4 h-4" />
-                      Refresh Data
-                    </LoadingButton>
-                  </div>
-
-                  {/* Configuration */}
-                  <div className="p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
-                    <h4 className="font-medium text-gray-900 mb-2">⚙️ System Settings</h4>
-                    <p className="text-sm text-gray-600 mb-3">Configure vCenter and Jira connections</p>
-                    <button
-                      onClick={() => setShowConfigModal(true)}
-                      className="w-full px-3 py-2 text-sm bg-gray-600 text-white rounded hover:bg-gray-700"
-                    >
-                      <Settings className="w-4 h-4 inline mr-2" />
-                      Open Settings
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Status Indicators */}
-            <div className="bg-white rounded-lg shadow-sm border">
-              <div className="p-6 border-b">
-                <h3 className="text-lg font-semibold text-gray-900">System Status</h3>
-              </div>
-              <div className="p-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Connection Status */}
-                  <div>
-                    <h4 className="font-medium text-gray-900 mb-3">Connection Status</h4>
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                        <span className="text-sm">vCenter Server</span>
-                        <span className="text-xs px-2 py-1 bg-green-100 text-green-800 rounded-full">
-                          {config.vcenter.host ? '🟢 Configured' : '🔴 Not Configured'}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                        <span className="text-sm">Jira Asset API</span>
-                        <span className="text-xs px-2 py-1 bg-green-100 text-green-800 rounded-full">
-                          {config.jira.token ? '🟢 Configured' : '🔴 Not Configured'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Last Operations */}
-                  <div>
-                    <h4 className="font-medium text-gray-900 mb-3">Recent Activity</h4>
-                    <div className="space-y-2">
-                      {logs.slice(0, 3).map((log, index) => (
-                        <div key={index} className="flex items-center gap-2 p-2 bg-gray-50 rounded text-xs">
-                          <div className={`w-2 h-2 rounded-full ${
-                            log.type === 'success' ? 'bg-green-500' :
-                            log.type === 'error' ? 'bg-red-500' :
-                            log.type === 'warning' ? 'bg-yellow-500' : 'bg-blue-500'
-                          }`}></div>
-                          <span className="text-gray-600">{log.timestamp}</span>
-                          <span className="flex-1 truncate">{log.message}</span>
-                        </div>
-                      ))}
-                      {logs.length === 0 && (
-                        <div className="text-sm text-gray-500 italic">No recent activity</div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
           </div>
         )}
 
@@ -1243,66 +1227,119 @@ const VMwareCollectorApp = () => {
         {/* Missing VMs Tab */}
         {activeTab === 'missing-vms' && (
           <div className="space-y-6">
-            {/* Selection Actions Panel */}
-            {data.missingVMs.length > 0 && (
-              <div className="bg-white rounded-lg shadow-sm border p-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-4">
-                    <div className="flex items-center space-x-2">
-                      <input
-                        type="checkbox"
-                        checked={selectAll}
-                        onChange={(e) => handleSelectAll(e.target.checked)}
-                        className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
-                      />
-                      <label className="text-sm font-medium text-gray-900">
-                        Select All ({data.missingVMs.filter(vm => vm.status === 'pending_creation').length} available)
-                      </label>
-                    </div>
-                    
-                    {selectedVMIds.size > 0 && (
-                      <div className="flex items-center space-x-2">
-                        <span className="text-sm text-gray-600">
-                          {selectedVMIds.size} VM{selectedVMIds.size !== 1 ? 's' : ''} selected
-                        </span>
-                        <button
-                          onClick={() => {
-                            setSelectedVMIds(new Set());
-                            setSelectAll(false);
-                          }}
-                          className="text-xs text-red-600 hover:text-red-800"
-                        >
-                          Clear Selection
-                        </button>
-                      </div>
-                    )}
+            {/* Enhanced Controls Panel */}
+            <div className="bg-white rounded-lg shadow-sm border p-6">
+              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                {/* Search and Filters */}
+                <div className="flex flex-col md:flex-row gap-4 flex-1">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                    <input
+                      type="text"
+                      placeholder="Search VMs by name or IP..."
+                      className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                    />
                   </div>
-
+                  
                   <div className="flex items-center space-x-2">
-                    <LoadingButton
-                      loading={loading.missingVMs}
-                      onClick={loadMissingVMs}
-                      variant="primary"
+                    <Filter className="w-4 h-4 text-gray-400" />
+                    <select
+                      className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                      value={statusFilter}
+                      onChange={(e) => setStatusFilter(e.target.value)}
                     >
-                      <RefreshCw className="w-4 h-4" />
-                      Refresh
-                    </LoadingButton>
-                    
-                    {selectedVMIds.size > 0 && (
-                      <button
-                        onClick={() => setShowPostingModal(true)}
-                        className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg flex items-center gap-2 font-medium transition-colors"
-                      >
-                        <HardDrive className="w-4 h-4" />
-                        Post Selected ({selectedVMIds.size})
-                      </button>
-                    )}
+                      <option value="all">All Statuses</option>
+                      <option value="pending_creation">Pending</option>
+                      <option value="failed">Failed</option>
+                    </select>
+                  </div>
+                  
+                  <div className="flex items-center space-x-2">
+                    <span className="text-sm text-gray-600">Per page:</span>
+                    <select
+                      value={itemsPerPage}
+                      onChange={(e) => handleItemsPerPageChange(parseInt(e.target.value))}
+                      className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="10">10</option>
+                      <option value="25">25</option>
+                      <option value="50">50</option>
+                      <option value="100">100</option>
+                    </select>
                   </div>
                 </div>
-              </div>
-            )}
 
-            {/* Missing VMs Table */}
+                {/* Actions */}
+                <div className="flex items-center space-x-3">
+                  <LoadingButton
+                    loading={loading.missingVMs}
+                    onClick={loadMissingVMs}
+                    variant="primary"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    Refresh
+                  </LoadingButton>
+
+                  {selectedVMIds.size > 0 && (
+                    <LoadingButton
+                      loading={loading.selectedJiraPost}
+                      onClick={() => setShowPostingModal(true)}
+                      variant="success"
+                    >
+                      <HardDrive className="w-4 h-4" />
+                      Post Selected ({selectedVMIds.size})
+                    </LoadingButton>
+                  )}
+                </div>
+              </div>
+
+              {/* Enhanced Selection Info */}
+              {data.missingVMs.length > 0 && (
+                <div className="mt-4 pt-4 border-t">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-4">
+                      <div className="flex items-center space-x-2">
+                        <input
+                          type="checkbox"
+                          checked={selectAll}
+                          onChange={(e) => handleSelectAll(e.target.checked)}
+                          className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
+                        />
+                        <label className="text-sm font-medium text-gray-900">
+                          Select All ({data.missingVMs.filter(vm => vm.status === 'pending_creation').length} available)
+                        </label>
+                      </div>
+                      
+                      {selectedVMIds.size > 0 && (
+                        <div className="flex items-center space-x-2">
+                          <span className="text-sm text-gray-600">
+                            {selectedVMIds.size} VM{selectedVMIds.size !== 1 ? 's' : ''} selected
+                          </span>
+                          <button
+                            onClick={() => {
+                              setSelectedVMIds(new Set());
+                              setSelectAll(false);
+                            }}
+                            className="text-xs text-red-600 hover:text-red-800"
+                          >
+                            Clear Selection
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center space-x-4 text-sm text-gray-500">
+                      <span>{data.missingVMs.filter(vm => vm.status === 'pending_creation').length} ready for posting</span>
+                      <span>{data.missingVMs.filter(vm => vm.status === 'failed').length} failed</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Enhanced Missing VMs Table */}
             <div className="bg-white rounded-lg shadow-sm">
               <div className="p-6 border-b">
                 <div className="flex items-center justify-between">
@@ -1335,15 +1372,16 @@ const VMwareCollectorApp = () => {
                           className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
                         />
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">VM Name</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">IP Address</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">CPU</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Memory (GB)</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Disk (GB)</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Site</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Environment</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
+                      <SortableHeader field="vm_name">VM Name</SortableHeader>
+                      <SortableHeader field="vm_summary.ip">IP Address</SortableHeader>
+                      <SortableHeader field="vm_summary.cpu">CPU</SortableHeader>
+                      <SortableHeader field="vm_summary.memory">Memory (GB)</SortableHeader>
+                      <SortableHeader field="vm_summary.disk">Disk (GB)</SortableHeader>
+                      <SortableHeader field="vm_summary.site">Site</SortableHeader>
+                      <SortableHeader field="vm_summary.environment">Environment</SortableHeader>
+                      <SortableHeader field="status">Status</SortableHeader>
+                      <SortableHeader field="created_date">Created</SortableHeader>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
@@ -1354,7 +1392,9 @@ const VMwareCollectorApp = () => {
                       return (
                         <tr 
                           key={vm.id || index} 
-                          className={`hover:bg-gray-50 ${isSelected ? 'bg-blue-50 border-blue-200' : ''} ${!isSelectable ? 'opacity-60' : ''}`}
+                          className={`hover:bg-gray-50 transition-colors ${
+                            isSelected ? 'bg-blue-50 border-blue-200' : ''
+                          } ${!isSelectable ? 'opacity-60' : ''}`}
                         >
                           <td className="px-6 py-4">
                             <input
@@ -1366,12 +1406,14 @@ const VMwareCollectorApp = () => {
                             />
                           </td>
                           <td className="px-6 py-4 text-sm font-medium text-gray-900">
-                            {vm.vm_name}
-                            {isSelected && (
-                              <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                                Selected
-                              </span>
-                            )}
+                            <div className="flex items-center">
+                              {vm.vm_name}
+                              {isSelected && (
+                                <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                                  Selected
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-6 py-4 text-sm text-gray-500">
                             {vm.vm_summary?.ip || 'N/A'}
@@ -1405,6 +1447,15 @@ const VMwareCollectorApp = () => {
                           <td className="px-6 py-4 text-sm text-gray-500">
                             {vm.created_date ? new Date(vm.created_date).toLocaleDateString() : 'N/A'}
                           </td>
+                          <td className="px-6 py-4">
+                            <button
+                              onClick={() => showVMDetails(vm, 'missing')}
+                              className="text-blue-600 hover:text-blue-800"
+                              title="View Details"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </button>
+                          </td>
                         </tr>
                       );
                     })}
@@ -1412,19 +1463,154 @@ const VMwareCollectorApp = () => {
                 </table>
                 
                 {loading.missingVMs ? (
-                  <div className="text-center py-8 text-gray-500">
-                    <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2" />
-                    Loading missing VMs...
+                  <div className="text-center py-12 text-gray-500">
+                    <RefreshCw className="w-8 h-8 animate-spin mx-auto mb-4" />
+                    <p className="text-lg font-medium mb-2">Loading missing VMs...</p>
                   </div>
                 ) : data.missingVMs.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">
+                  <div className="text-center py-12 text-gray-500">
                     <AlertCircle className="w-12 h-12 mx-auto mb-4 text-gray-400" />
                     <p className="text-lg font-medium mb-2">No missing VMs found</p>
                     <p className="text-sm">All vCenter VMs are properly registered in Jira Asset Management</p>
                   </div>
                 ) : null}
               </div>
+
+              {/* Enhanced Pagination */}
+              {data.missingVMs.length > 0 && (
+                <div className="flex items-center justify-between px-6 py-4 bg-white border-t">
+                  <div className="flex items-center space-x-4">
+                    <span className="text-sm text-gray-700">
+                      Showing {Math.min((currentPage - 1) * itemsPerPage + 1, data.missingVMs.length)}-{Math.min(currentPage * itemsPerPage, data.missingVMs.length)} of {data.missingVMs.length} results
+                    </span>
+                  </div>
+                  
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={() => handlePageChange(Math.max(1, currentPage - 1))}
+                      disabled={currentPage === 1}
+                      className="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                    
+                    {/* Page numbers */}
+                    {(() => {
+                      const totalPages = Math.ceil(data.missingVMs.length / itemsPerPage);
+                      const pages = [];
+                      const maxPages = 5;
+                      
+                      let startPage = Math.max(1, currentPage - Math.floor(maxPages / 2));
+                      let endPage = Math.min(totalPages, startPage + maxPages - 1);
+                      
+                      if (endPage - startPage + 1 < maxPages) {
+                        startPage = Math.max(1, endPage - maxPages + 1);
+                      }
+                      
+                      for (let i = startPage; i <= endPage; i++) {
+                        pages.push(
+                          <button
+                            key={i}
+                            onClick={() => handlePageChange(i)}
+                            className={`px-3 py-1 text-sm border rounded ${
+                              currentPage === i
+                                ? 'bg-blue-600 text-white border-blue-600'
+                                : 'border-gray-300 hover:bg-gray-100'
+                            }`}
+                          >
+                            {i}
+                          </button>
+                        );
+                      }
+                      
+                      return pages;
+                    })()}
+                    
+                    <button
+                      onClick={() => handlePageChange(currentPage + 1)}
+                      disabled={currentPage * itemsPerPage >= data.missingVMs.length}
+                      className="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
+
+            {/* Enhanced Posting Confirmation Modal */}
+            {showPostingModal && (
+              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                <div className="bg-white rounded-lg shadow-xl max-w-lg w-full">
+                  <div className="p-6 border-b">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-lg font-semibold text-gray-900">Confirm Jira Asset Creation</h3>
+                      <button
+                        onClick={() => setShowPostingModal(false)}
+                        className="text-gray-400 hover:text-gray-600 transition-colors"
+                        disabled={loading.selectedJiraPost}
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div className="p-6">
+                    <div className="mb-4">
+                      <p className="text-gray-700 mb-2">
+                        You are about to create <strong>{selectedVMIds.size}</strong> new VM assets in Jira Asset Management.
+                      </p>
+                      
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                        <div className="flex">
+                          <CheckCircle className="w-5 h-5 text-blue-600 mt-0.5 mr-3 flex-shrink-0" />
+                          <div className="text-sm text-blue-800">
+                            <p className="font-medium">Selected VMs will be:</p>
+                            <ul className="mt-2 list-disc list-inside space-y-1">
+                              <li>Created as new assets in Jira</li>
+                              <li>Moved to completed status</li>
+                              <li>Available in Jira Asset Management</li>
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                        <div className="flex">
+                          <AlertCircle className="w-5 h-5 text-yellow-600 mt-0.5 mr-3 flex-shrink-0" />
+                          <div className="text-sm text-yellow-800">
+                            <p className="font-medium">Please ensure:</p>
+                            <ul className="mt-2 list-disc list-inside space-y-1">
+                              <li>Jira authentication token is valid</li>
+                              <li>Network connectivity to Jira server</li>
+                              <li>Required permissions for asset creation</li>
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end space-x-3">
+                      <button
+                        onClick={() => setShowPostingModal(false)}
+                        className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors"
+                        disabled={loading.selectedJiraPost}
+                      >
+                        Cancel
+                      </button>
+                      <LoadingButton
+                        loading={loading.selectedJiraPost}
+                        onClick={postSelectedVMsToJira}
+                        variant="success"
+                      >
+                        <HardDrive className="w-4 h-4" />
+                        {loading.selectedJiraPost ? 'Creating Assets...' : `Create ${selectedVMIds.size} Assets`}
+                      </LoadingButton>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

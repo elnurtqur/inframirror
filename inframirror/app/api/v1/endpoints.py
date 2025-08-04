@@ -6,6 +6,7 @@ import logging
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from fastapi.responses import JSONResponse
+from datetime import datetime
 
 from app.models.models import (
     CollectionRequest, 
@@ -35,6 +36,9 @@ from app.models.models import (
     JiraPosterRequest, JiraPosterResponse, JiraPosterStats,
     CompletedJiraAsset, FailedJiraAsset, CompletedAssetListResponse, FailedAssetListResponse
 )
+from app.core.database import get_async_collection, get_sync_collection  # Add this line
+from app.core.config import settings  # Add this line
+
 
 logger = logging.getLogger(__name__)
 
@@ -263,20 +267,20 @@ async def process_vm_diff(
     request: DiffProcessRequest = DiffProcessRequest()
 ):
     """
-    Process VM diff between vCenter and Jira - find missing VMs
+    Process VM diff between vCenter and Jira - with DYNAMIC SCHEMA support
     """
     try:
         logger.info("VM diff processing started")
         
-        # Extract Jira configuration from request
+        # ✅ EXTRACT DYNAMIC CONFIGURATION
         jira_config = None
         if request.jira_config:
             jira_config = {
                 'api_url': request.jira_config.api_url,
                 'token': request.jira_config.token,
-                'object_type_id': request.jira_config.object_type_id,
-                'object_schema_id': request.jira_config.object_schema_id,
-                #'cookie': request.jira_config.cookie or ''
+                'object_type_id': request.jira_config.object_type_id,      # ✅ DYNAMIC
+                'object_schema_id': request.jira_config.object_schema_id,  # ✅ DYNAMIC
+                'cookie': request.jira_config.cookie or ''
             }
         
         # Background task function
@@ -284,9 +288,9 @@ async def process_vm_diff(
             return diff_service.process_vm_diff(
                 api_url=jira_config['api_url'] if jira_config else None,
                 token=jira_config['token'] if jira_config else None,
-                object_type_id=jira_config['object_type_id'] if jira_config else None,
-                object_schema_id=jira_config['object_schema_id'] if jira_config else None,
-                #cookie=jira_config['cookie'] if jira_config else None
+                object_type_id=jira_config['object_type_id'] if jira_config else None,      # ✅ PASS DYNAMIC VALUE
+                object_schema_id=jira_config['object_schema_id'] if jira_config else None,  # ✅ PASS DYNAMIC VALUE
+                cookie=jira_config['cookie'] if jira_config else None
             )
         
         # Run immediately (sync)
@@ -296,12 +300,14 @@ async def process_vm_diff(
             return DiffProcessResponse(
                 status="success",
                 message=result['message'],
-                total_vcenter_vms=result['total_vcenter_vms'],
-                total_jira_vms=result['total_jira_vms'],
+                total_vcenter_vms=result.get('total_vcenter_vms'),
+                total_jira_vms=result.get('total_jira_vms'),
                 missing_vms_count=result['missing_vms_count'],
                 processed_missing_vms=result['processed_missing_vms'],
                 errors=result['errors'],
-                processing_time=result['processing_time']
+                processing_time=result['processing_time'],
+                object_type_id=result.get('object_type_id'),      # ✅ RETURN USED VALUES
+                object_schema_id=result.get('object_schema_id')   # ✅ RETURN USED VALUES
             )
         else:
             raise HTTPException(
@@ -314,6 +320,195 @@ async def process_vm_diff(
         raise HTTPException(
             status_code=500,
             detail=f"VM diff processing error: {str(e)}"
+        )
+
+
+# ✅ NEW ENDPOINT: Custom payload posting
+@router.post("/post-custom-payload-to-jira")
+async def post_custom_payload_to_jira(
+    payload_request: dict  # ✅ ACCEPT ARBITRARY JSON
+):
+    """
+    Post custom Jira Asset payload directly
+    
+    Example payload:
+    {
+        "jira_config": {
+            "jira_token": "your_token",
+            "create_url": "https://jira.../object/create"
+        },
+        "payload": {
+            "objectTypeId": "3191",
+            "objectSchemaId": "242",
+            "attributes": [...]
+        }
+    }
+    """
+    try:
+        logger.info("Custom payload posting started")
+        
+        # Extract configuration and payload
+        jira_config = payload_request.get('jira_config', {})
+        custom_payload = payload_request.get('payload', {})
+        
+        if not custom_payload:
+            raise HTTPException(status_code=400, detail="No payload provided")
+        
+        # Create Jira Poster service
+        poster_service = JiraPosterService(
+            jira_token=jira_config.get('jira_token'),
+            create_url=jira_config.get('create_url')
+        )
+        
+        # Create fake VM document for processing
+        fake_vm_doc = {
+            'vm_name': custom_payload.get('vm_name', 'custom-payload-vm'),
+            'jira_asset_payload': custom_payload
+        }
+        
+        # Post to Jira
+        result = poster_service.post_vm_to_jira(fake_vm_doc)
+        
+        return {
+            'status': 'success' if result['success'] else 'failed',
+            'message': f"Custom payload posted: {result.get('object_key', 'Failed')}",
+            'result': result
+        }
+        
+    except Exception as e:
+        logger.error(f"Custom payload posting error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Custom payload posting error: {str(e)}"
+        )
+
+
+# ✅ NEW ENDPOINT: Dynamic configuration testing
+@router.post("/test-jira-config")
+async def test_jira_config(
+    config_request: dict
+):
+    """
+    Test Jira configuration with custom object type and schema
+    
+    Example:
+    {
+        "jira_config": {
+            "api_url": "https://jira.../object/navlist/iql",
+            "token": "your_token",
+            "object_type_id": "3191", 
+            "object_schema_id": "242"
+        }
+    }
+    """
+    try:
+        jira_config = config_request.get('jira_config', {})
+        
+        # Create test service
+        jira_service = JiraService(
+            api_url=jira_config.get('api_url'),
+            token=jira_config.get('token'),
+            object_type_id=jira_config.get('object_type_id'),
+            object_schema_id=jira_config.get('object_schema_id')
+        )
+        
+        # Test schema access
+        session = jira_service.get_session()
+        if not session:
+            return {'status': 'failed', 'message': 'Authentication failed'}
+        
+        # Test object type access
+        object_type_url = f"https://jira-support.company.com/rest/insight/1.0/objecttype/{jira_config.get('object_type_id')}"
+        response = session.get(object_type_url)
+        
+        if response.status_code == 200:
+            obj_type_data = response.json()
+            return {
+                'status': 'success',
+                'message': 'Configuration valid',
+                'object_type_name': obj_type_data.get('name'),
+                'object_type_id': obj_type_data.get('id'),
+                'schema_id': obj_type_data.get('objectSchemaId'),
+                'config_used': jira_config
+            }
+        else:
+            return {
+                'status': 'failed',
+                'message': f'Object Type access failed: {response.status_code}',
+                'config_used': jira_config
+            }
+            
+    except Exception as e:
+        logger.error(f"Config test error: {e}")
+        return {
+            'status': 'error',
+            'message': f'Config test error: {str(e)}'
+        }
+
+
+# ✅ NEW ENDPOINT: Environment-based configuration
+@router.post("/process-vm-diff-env")
+async def process_vm_diff_for_environment(
+    environment: str = "production",  # ✅ ENVIRONMENT PARAMETER
+    object_type_id: Optional[str] = None,
+    object_schema_id: Optional[str] = None
+):
+    """
+    Process VM diff for specific environment with predefined configurations
+    
+    Environments:
+    - production: objectTypeId=3191, objectSchemaId=242
+    - staging: objectTypeId=3192, objectSchemaId=243  
+    - development: objectTypeId=3193, objectSchemaId=244
+    """
+    
+    # ✅ PREDEFINED ENVIRONMENT CONFIGURATIONS
+    env_configs = {
+        "production": {
+            "object_type_id": "3191",
+            "object_schema_id": "242"
+        },
+        "staging": {
+            "object_type_id": "3192", 
+            "object_schema_id": "243"
+        },
+        "development": {
+            "object_type_id": "3193",
+            "object_schema_id": "244"
+        }
+    }
+    
+    try:
+        # Get environment config or use overrides
+        env_config = env_configs.get(environment, env_configs["production"])
+        
+        final_object_type_id = object_type_id or env_config["object_type_id"]
+        final_object_schema_id = object_schema_id or env_config["object_schema_id"]
+        
+        logger.info(f"Processing VM diff for environment: {environment}")
+        logger.info(f"Using Object Type ID: {final_object_type_id}")
+        logger.info(f"Using Object Schema ID: {final_object_schema_id}")
+        
+        # Process with environment-specific configuration
+        result = diff_service.process_vm_diff(
+            object_type_id=final_object_type_id,
+            object_schema_id=final_object_schema_id
+        )
+        
+        return {
+            'status': result['status'],
+            'message': f"Environment '{environment}' processing: {result['message']}",
+            'environment': environment,
+            'object_type_id': final_object_type_id,
+            'object_schema_id': final_object_schema_id,
+            'result': result
+        }
+        
+    except Exception as e:
+        logger.error(f"Environment VM diff error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Environment VM diff error: {str(e)}"
         )
 
 
@@ -826,37 +1021,89 @@ async def get_completed_jira_assets(
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of assets")
 ):
     """
-    Get successfully completed Jira Asset creations
+    Get successfully completed Jira Asset creations - FIXED ObjectId VERSION
     """
     try:
         logger.info(f"Retrieving completed Jira assets (skip={skip}, limit={limit})")
         
-        # Get database service for completed assets
-        poster_service = JiraPosterService()
-        poster_service.get_collections()
-        
-        # Get completed assets
-        cursor = poster_service.completed_collection.find({}).skip(skip).limit(limit).sort('jira_post_date', -1)
-        assets = list(cursor)
+        # Direct database access
+        vcenter_collection = await get_async_collection()
+        client = vcenter_collection.database.client
+        completed_collection = client[settings.mongodb_database]['completed_jira_assets']
         
         # Get total count
-        total_count = poster_service.completed_collection.count_documents({})
+        total_count = await completed_collection.count_documents({})
+        logger.info(f"Total completed assets in DB: {total_count}")
         
-        # Convert to Pydantic models
+        if total_count == 0:
+            return CompletedAssetListResponse(
+                status="success",
+                message="No completed assets found",
+                total_count=0,
+                assets=[]
+            )
+        
+        # Get assets
+        cursor = completed_collection.find({}).skip(skip).limit(limit).sort('jira_post_date', -1)
+        raw_assets = await cursor.to_list(length=limit)
+        
+        logger.info(f"Raw assets retrieved: {len(raw_assets)}")
+        
+        # Convert to Pydantic models with ObjectId handling
         asset_models = []
-        for asset_data in assets:
+        for asset_data in raw_assets:
             try:
-                # Remove MongoDB _id field
+                # ✅ FIX: Convert ObjectId fields to strings
                 if '_id' in asset_data:
                     del asset_data['_id']
                 
+                # ✅ CRITICAL FIX: Convert original_id ObjectId to string
+                if 'original_id' in asset_data and asset_data['original_id']:
+                    if hasattr(asset_data['original_id'], '__str__'):
+                        asset_data['original_id'] = str(asset_data['original_id'])
+                
+                # ✅ FIX: Handle any other ObjectId fields
+                for key, value in asset_data.items():
+                    if hasattr(value, '__class__') and 'ObjectId' in str(type(value)):
+                        asset_data[key] = str(value)
+                
+                # ✅ FIX: Ensure dates are proper datetime objects
+                date_fields = ['jira_post_date', 'created_date']
+                for date_field in date_fields:
+                    if date_field not in asset_data or asset_data[date_field] is None:
+                        asset_data[date_field] = datetime.utcnow()
+                
+                # ✅ FIX: Ensure required fields exist with defaults
+                required_defaults = {
+                    'vm_name': 'Unknown',
+                    'jira_asset_payload': {},
+                    'vm_summary': {},
+                    'debug_info': {},
+                    'status': 'completed',
+                    'processing_completed': True,
+                    'source': 'jira_asset_poster',
+                    'original_id': '',
+                    'jira_object_key': None,
+                    'jira_response': None
+                }
+                
+                for field, default_value in required_defaults.items():
+                    if field not in asset_data:
+                        asset_data[field] = default_value
+                
+                logger.debug(f"Processing asset: {asset_data.get('vm_name')} (original_id: {asset_data.get('original_id')})")
+                
+                # Create CompletedJiraAsset model
                 asset_model = CompletedJiraAsset(**asset_data)
                 asset_models.append(asset_model)
+                
             except Exception as e:
                 logger.warning(f"Completed asset model conversion error: {e}")
+                logger.debug(f"Failed asset data keys: {list(asset_data.keys())}")
+                logger.debug(f"original_id type: {type(asset_data.get('original_id'))}")
                 continue
         
-        logger.info(f"Retrieved {len(asset_models)} completed assets")
+        logger.info(f"Successfully converted {len(asset_models)} completed assets")
         
         return CompletedAssetListResponse(
             status="success",
@@ -867,6 +1114,7 @@ async def get_completed_jira_assets(
         
     except Exception as e:
         logger.error(f"Error retrieving completed assets: {e}")
+        logger.exception("Full traceback:")
         raise HTTPException(
             status_code=500,
             detail=f"Error retrieving completed assets: {str(e)}"
@@ -1278,13 +1526,17 @@ async def post_selected_vms_to_jira(
             jira_config = {
                 'jira_token': request.jira_config.jira_token,
                 'create_url': request.jira_config.create_url,
+                'object_type_id': request.jira_config.object_type_id or "3191",
+                'object_schema_id': request.jira_config.object_schema_id or "242",
                 'delay_seconds': request.jira_config.delay_seconds or 1.0
             }
         
         # Create Jira Poster service
         poster_service = JiraPosterService(
             jira_token=jira_config.get('jira_token'),
-            create_url=jira_config.get('create_url')
+            create_url=jira_config.get('create_url'),
+            object_type_id=jira_config.get('object_type_id'),
+            object_schema_id=jira_config.get('object_schema_id')
         )
         
         # Process selected VMs
