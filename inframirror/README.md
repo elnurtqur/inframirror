@@ -194,7 +194,7 @@ GET /api/v1/get-all-jira-vms-from-db?skip=0&limit=1000
 # Get missing VMs (in vCenter but not in Jira)
 GET /api/v1/get-all-missing-vms-from-db?skip=0&limit=1000
 
-# Get single VM by UUID or MobID
+# Get single VM by UUID or vmid
 GET /api/v1/vm/{identifier}
 ```
 

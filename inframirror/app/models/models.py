@@ -60,7 +60,7 @@ class VMTag(BaseModel):
 class VirtualMachine(BaseModel):
     """Virtual Machine model"""
     name: str
-    mobid: str
+    vmid: str
     uuid: Optional[str] = None
     instance_uuid: Optional[str] = None
     power_state: Optional[str] = None
@@ -304,6 +304,8 @@ class VCenterConfig(BaseModel):
     username: str = Field(..., description="vCenter username")
     password: str = Field(..., description="vCenter password")
     port: int = Field(443, description="vCenter port (default: 443)")
+    default_site: Optional[str] = Field(None, description="Default Site value when VM has no Site tag")
+    default_zone: Optional[str] = Field(None, description="Default Zone value when VM has no Zone tag")
 
 
 class JiraConfig(BaseModel):

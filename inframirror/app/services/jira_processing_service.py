@@ -22,7 +22,7 @@ def process_jira_vm_batch(args):
     # Create new service instance for each process
     jira_service = JiraService(
         api_url=jira_config['api_url'],
-        token='token_here',
+        token=jira_config['token'],
         object_type_id=jira_config['object_type_id'],
         object_schema_id=jira_config['object_schema_id'],
         #cookie=jira_config.get('cookie', '')
@@ -111,7 +111,7 @@ class JiraProcessingService:
         # Configure Jira service
         jira_service = JiraService(
             api_url=jira_config['api_url'],
-            token='token_here',
+            token=jira_config['token'],
             object_type_id=jira_config['object_type_id'],
             object_schema_id=jira_config['object_schema_id'],
             #cookie=jira_config['cookie']

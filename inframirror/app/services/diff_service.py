@@ -104,7 +104,7 @@ class DiffService:
                 'name': 1, 'uuid': 1, 'ip_address': 1, 'guest_ip_addresses': 1,
                 'cpu_count': 1, 'memory_gb': 1, 'resource_pool': 1, 'annotation': 1,
                 'guest_os': 1, 'tags': 1, 'tags_jira_asset': 1, 'disks': 1, 
-                'created_date': 1, 'mobid': 1, 'networks': 1
+                'created_date': 1, 'vmid': 1, 'networks': 1
             })
             
             for vm in cursor:
@@ -113,7 +113,7 @@ class DiffService:
                 if vm_name:
                     vm_name = str(vm_name).strip()
                 else:
-                    vm_name = f"VM_{vm.get('mobid', 'Unknown')}"  # Fallback name
+                    vm_name = f"VM_{vm.get('vmid', 'Unknown')}"  # Fallback name
                 
                 # SAFE IP HANDLING  
                 vm_ip = vm.get('ip_address')
@@ -127,7 +127,7 @@ class DiffService:
                     guest_ips = []
                 
                 if not vm_name:
-                    logger.warning(f"VM with mobid {vm.get('mobid', 'Unknown')} has no valid name, skipping")
+                    logger.warning(f"VM with vmid {vm.get('vmid', 'Unknown')} has no valid name, skipping")
                     continue
                 
                 all_vms.append(vm)
@@ -271,7 +271,7 @@ class DiffService:
             if vm_name:
                 vm_name = str(vm_name).strip()
             else:
-                vm_name = f"VM_{vm_data.get('mobid', 'Unknown')}"
+                vm_name = f"VM_{vm_data.get('vmid', 'Unknown')}"
             
             # SAFE IP HANDLING
             vm_ip = vm_data.get('ip_address')
@@ -567,7 +567,7 @@ class DiffService:
             return None  # Unknown OS
     
     def create_jira_asset_payload(self, vm_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Create Jira Asset payload from vCenter VM data with DYNAMIC SCHEMA"""
+        """Create Jira Asset payload from vCenter VM data with DYNAMIC SCHEMA and VMID support"""
         try:
             vm_name = vm_data.get('name', '').strip()
             
@@ -577,6 +577,15 @@ class DiffService:
             vm_environment = self.extract_tag_value(vm_data, 'Environment', 'tags_jira_asset') or 'Unknown'
             ip_address = vm_data.get('ip_address', '') or ''
             created_by = self.extract_tag_value(vm_data, 'CreatedBy', 'tags') or 'Unknown'
+            
+            # ✅ VMID məlumatını əldə et - müxtəlif sahələrdən yoxla
+            vmid = (
+                vm_data.get('vmid') or 
+                vm_data.get('vm_id') or 
+                vm_data.get('mobid') or  # MobID backup kimi
+                vm_data.get('instance_uuid', '')[:8] or  # Instance UUID'nin ilk 8 rəqəmi
+                'Unknown'
+            )
             
             # Hardware information
             cpu = vm_data.get('cpu_count', 0) or 0
@@ -599,8 +608,8 @@ class DiffService:
             
             # For OperatingSystem, first check tags_jira_asset, then map from guest_os
             os_value = (self.extract_tag_value(vm_data, 'OperatingSystem', 'tags_jira_asset') or 
-                       self.extract_tag_value(vm_data, 'OS', 'tags_jira_asset') or
-                       self.extract_tag_value(vm_data, 'Osname', 'tags_jira_asset'))
+                    self.extract_tag_value(vm_data, 'OS', 'tags_jira_asset') or
+                    self.extract_tag_value(vm_data, 'Osname', 'tags_jira_asset'))
             
             # If no OS in tags_jira_asset, map from guest_os
             if not os_value:
@@ -608,7 +617,7 @@ class DiffService:
                 os_value = self.map_vcenter_os_to_jira_os(guest_os)
                 logger.info(f"VM {vm_name} - guest_os '{guest_os}' mapped to '{os_value}'")
             
-            logger.info(f"VM {vm_name} - System: {system_value}, Component: {component_value}, OS: {os_value}")
+            logger.info(f"VM {vm_name} - System: {system_value}, Component: {component_value}, OS: {os_value}, VMID: {vmid}")
             
             # ✅ GET ITAM NUMBERS WITH FULL API LOOKUP
             system_itam = 'Unknown'
@@ -643,7 +652,7 @@ class DiffService:
             
             logger.info(f"📊 ITAM Summary for {vm_name}: System={system_itam}, Component={component_itam}, OS={osname_itam}")
             
-            # ✅ DYNAMIC PAYLOAD CREATION
+            # ✅ DYNAMIC PAYLOAD CREATION WITH VMID
             payload = {
                 "objectTypeId": self.current_object_type_id,     # ✅ DYNAMIC
                 "objectSchemaId": self.current_object_schema_id, # ✅ DYNAMIC
@@ -662,13 +671,16 @@ class DiffService:
                     {"objectTypeAttributeId": 14606, "objectAttributeValues": [{"value": description}]}, # Description
                     {"objectTypeAttributeId": 14612, "objectAttributeValues": [{"value": resource_pool}]}, # ResourcePool
                     {"objectTypeAttributeId": 14820, "objectAttributeValues": [{"value": osname_itam}]}, # OperatingSystem
-                    {"objectTypeAttributeId": 14817, "objectAttributeValues": [{"value": system_itam}]}  # System
+                    {"objectTypeAttributeId": 14817, "objectAttributeValues": [{"value": system_itam}]}, # System
+                    # ✅ YENİ: VMID sahəsini əlavə et
+                    {"objectTypeAttributeId": 15636, "objectAttributeValues": [{"value": str(vmid)}]}  # VMID
                 ]
             }
             
-            # ✅ ENHANCED DEBUG INFO
+            # ✅ ENHANCED DEBUG INFO WITH VMID
             debug_info = {
                 'vm_name': vm_name,
+                'vmid': vmid,  # ✅ VMID debug məlumatı
                 'source_system_value': system_value,
                 'system_itam': system_itam,
                 'source_component_value': component_value,
@@ -685,13 +697,14 @@ class DiffService:
                 'schema_source': 'dynamic_configuration'
             }
             
-            logger.info(f"✅ Created payload for {vm_name} with Schema {self.current_object_schema_id}, Type {self.current_object_type_id}")
+            logger.info(f"✅ Created payload for {vm_name} with VMID: {vmid}, Schema {self.current_object_schema_id}, Type {self.current_object_type_id}")
             
             return {
                 'jira_payload': payload,
                 'debug_info': debug_info,
                 'vm_data_summary': {
                     'name': vm_name,
+                    'vmid': vmid,  # ✅ Summary-də də VMID
                     'cpu': cpu,
                     'memory': memory,
                     'disk': disk,

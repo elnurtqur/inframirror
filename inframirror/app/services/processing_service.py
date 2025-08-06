@@ -26,7 +26,9 @@ def process_vm_batch(args):
         host=vcenter_config['host'],
         username=vcenter_config['username'],
         password=vcenter_config['password'],
-        port=vcenter_config['port']
+        port=vcenter_config['port'],
+        default_site=vcenter_config.get('default_site'),
+        default_zone=vcenter_config.get('default_zone')
     )
     
     database_service = DatabaseService()
@@ -45,6 +47,7 @@ def process_vm_batch(args):
         batch_vm_data = []
         batch_processed = 0
         batch_errors = 0
+        default_applied = 0
         
         for vm_ref in vm_ref_batch:
             try:
@@ -60,6 +63,12 @@ def process_vm_batch(args):
                 if vm_data:
                     batch_vm_data.append(vm_data)
                     batch_processed += 1
+
+                    if vm_data.get('tags'):
+                        vm_tags = vm_data['tags'][0] if vm_data['tags'] else {}
+                        if (vcenter_config.get('default_site') and vm_tags.get('Site') == vcenter_config.get('default_site')) or \
+                           (vcenter_config.get('default_zone') and vm_tags.get('Zone') == vcenter_config.get('default_zone')):
+                            default_applied += 1
                     
                     # Tag sayını log et
                     tag_count = len(vm_data.get('tags', []))
@@ -81,6 +90,7 @@ def process_vm_batch(args):
             'batch_id': batch_id,
             'processed': batch_processed,
             'errors': batch_errors,
+            'default_applied': default_applied,
             'message': f'{batch_processed} emal, {batch_errors} xəta'
         }
         
@@ -109,6 +119,8 @@ class ProcessingService:
         vcenter_username: Optional[str] = None,
         vcenter_password: Optional[str] = None,
         vcenter_port: Optional[int] = None,
+        default_site: Optional[str] = None,
+        default_zone: Optional[str] = None,
         batch_size: Optional[int] = None,
         max_processes: Optional[int] = None
     ) -> Dict[str, Any]:
@@ -119,18 +131,25 @@ class ProcessingService:
             'host': vcenter_host or settings.vcenter_host,
             'username': vcenter_username or settings.vcenter_username,
             'password': vcenter_password or settings.vcenter_password,
-            'port': vcenter_port or settings.vcenter_port
+            'port': vcenter_port or settings.vcenter_port,
+            'default_site': default_site,
+            'default_zone': default_zone
         }
         
         batch_size = batch_size or settings.batch_size
         max_processes = max_processes or settings.max_processes
         
+        if default_site or default_zone:
+            logger.info(f"Default dəyərlər təyin edildi - Site: {default_site}, Zone: {default_zone}")
+
         # vCenter service'i konfiq et
         vcenter_service = VCenterService(
             host=vcenter_config['host'],
             username=vcenter_config['username'],
             password=vcenter_config['password'],
-            port=vcenter_config['port']
+            port=vcenter_config['port'],
+            default_site=vcenter_config['default_site'],  # ✅ YENİ
+            default_zone=vcenter_config['default_zone']   # ✅ YENİ
         )
         
         try:
@@ -181,6 +200,7 @@ class ProcessingService:
             # Nəticələri hesabla
             total_processed = sum(r['processed'] for r in results)
             total_errors = sum(r['errors'] for r in results)
+            total_defaults = sum(r.get('default_applied', 0) for r in results)
             processing_time = end_time - start_time
             
             # Nəticələri log et
@@ -194,6 +214,7 @@ class ProcessingService:
             logger.info(f"Toplam VM sayı: {len(vm_refs)}")
             logger.info(f"Uğurla emal: {total_processed}")
             logger.info(f"Xəta sayı: {total_errors}")
+            logger.info(f"Default dəyər tətbiq edildi: {total_defaults}")
             logger.info(f"Emal müddəti: {processing_time:.2f} saniyə")
             logger.info(f"VM/saniyə: {len(vm_refs)/processing_time:.2f}")
             
@@ -203,6 +224,7 @@ class ProcessingService:
                 'total_vms': len(vm_refs),
                 'processed_vms': total_processed,
                 'errors': total_errors,
+                'default_applied': total_defaults,
                 'processing_time': processing_time,
                 'batches': results
             }

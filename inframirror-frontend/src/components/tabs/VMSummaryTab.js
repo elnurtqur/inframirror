@@ -4,6 +4,43 @@ import LoadingButton from '../common/LoadingButton';
 import SortableHeader from '../common/SortableHeader';
 import Pagination from '../common/Pagination';
 
+// VMID Badge komponenti
+const VMIDCard = ({ vmid, size = 'xs' }) => {
+  const sizeClasses = {
+    xs: 'px-2 py-1 text-xs',
+    sm: 'px-3 py-1.5 text-sm', 
+    md: 'px-4 py-2 text-base'
+  };
+
+  if (!vmid || vmid === 'N/A') {
+    return (
+      <span className={`inline-flex items-center ${sizeClasses[size]} bg-gray-100 text-gray-400 rounded-lg border border-gray-200 italic`}>
+        No ID
+      </span>
+    );
+  }
+
+  return (
+    <div className="flex items-center justify-center">
+      <div className={`inline-flex items-center ${sizeClasses[size]} bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 rounded-lg border border-blue-200 font-mono hover:from-blue-100 hover:to-indigo-100 transition-all duration-200 shadow-sm cursor-default`}>
+        <svg className="w-3 h-3 mr-1.5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
+        </svg>
+        <span className="select-all" title={`VM ID: ${vmid}`}>{vmid}</span>
+        <button 
+          onClick={() => navigator.clipboard?.writeText(vmid)}
+          className="ml-1.5 p-0.5 hover:bg-blue-200 rounded transition-colors"
+          title="Copy VM ID"
+        >
+          <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const VMSummaryTab = ({
   vmDataSource,
   setVmDataSource,
@@ -109,12 +146,20 @@ const VMSummaryTab = ({
         </div>
         
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full min-w-max">
             <thead className="bg-gray-50">
               <tr>
                 <SortableHeader field="name" sortField={sortField} sortDirection={sortDirection} onSort={handleSort}>
                   VM Name
                 </SortableHeader>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider min-w-[110px]">
+                  <div className="flex items-center space-x-1">
+                    <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
+                    </svg>
+                    <span>VM ID</span>
+                  </div>
+                </th>
                 <SortableHeader field="ip_address" sortField={sortField} sortDirection={sortDirection} onSort={handleSort}>
                   IP Address
                 </SortableHeader>
@@ -152,6 +197,9 @@ const VMSummaryTab = ({
                 <tr key={index} className="hover:bg-gray-50">
                   <td className="px-6 py-4 text-sm font-medium text-gray-900">
                     {vm.name || vm.vm_name}
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <VMIDCard vmid={vm.vmid || vm.vm_summary?.vmid} size="xs" />
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500">
                     {vm.ip_address || 'N/A'}

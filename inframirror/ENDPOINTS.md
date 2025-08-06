@@ -272,7 +272,7 @@ curl "http://localhost:8000/api/v1/get-all-vms-from-db?skip=1000&limit=500"
   "vms": [
     {
       "name": "web-server-01",
-      "mobid": "vm-1234",
+      "vmid": "vm-1234",
       "uuid": "5047c2c8-...",
       "power_state": "poweredOn",
       "cpu_count": 4,
@@ -299,14 +299,14 @@ curl "http://localhost:8000/api/v1/get-all-vms-from-db?skip=1000&limit=500"
 #### 4.2 Get Single VM by Identifier
 **GET** `/api/v1/vm/{identifier}`
 
-Get single VM by UUID or MobID.
+Get single VM by UUID or vmid.
 
 **cURL Examples:**
 ```bash
 # By UUID
 curl "http://localhost:8000/api/v1/vm/5047c2c8-1234-5678-9abc-def012345678"
 
-# By MobID
+# By vmid
 curl "http://localhost:8000/api/v1/vm/vm-1234"
 ```
 
@@ -318,7 +318,7 @@ curl "http://localhost:8000/api/v1/vm/vm-1234"
   "data": {
     "name": "web-server-01",
     "uuid": "5047c2c8-1234-5678-9abc-def012345678",
-    "mobid": "vm-1234",
+    "vmid": "vm-1234",
     "power_state": "poweredOn"
   }
 }

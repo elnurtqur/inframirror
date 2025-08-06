@@ -71,7 +71,12 @@ async def collect_vms(
                 'password': request.vcenter_config.password,
                 'port': request.vcenter_config.port
             }
+            default_site = request.vcenter_config.default_site
+            default_zone = request.vcenter_config.default_zone
         
+        if default_site or default_zone:
+            logger.info(f"Default dəyərlər konfiqurasyonu - Site: {default_site}, Zone: {default_zone}")
+
         # Background task function
         def run_collection():
             return processing_service.collect_vms(
@@ -79,6 +84,8 @@ async def collect_vms(
                 vcenter_username=vcenter_config['username'] if vcenter_config else None,
                 vcenter_password=vcenter_config['password'] if vcenter_config else None,
                 vcenter_port=vcenter_config['port'] if vcenter_config else None,
+                default_site=default_site,
+                default_zone=default_zone,
                 batch_size=request.batch_size,
                 max_processes=request.max_processes
             )
@@ -87,6 +94,9 @@ async def collect_vms(
         result = run_collection()
         
         if result['status'] == 'success':
+            response_message = result['message']
+            if result.get('default_applied', 0) > 0:
+                response_message += f" ({result['default_applied']} VM-ə default dəyərlər tətbiq edildi)"
             return CollectionResponse(
                 status="success",
                 message=result['message'],
@@ -129,7 +139,11 @@ async def collect_vms_async(
                 'password': request.vcenter_config.password,
                 'port': request.vcenter_config.port
             }
-        
+            default_site = request.vcenter_config.default_site
+            default_zone = request.vcenter_config.default_zone
+
+        if default_site or default_zone:
+            logger.info(f"Async collection - Default dəyərlər: Site={default_site}, Zone={default_zone}")
         # Add as background task
         background_tasks.add_task(
             processing_service.collect_vms,
@@ -137,6 +151,8 @@ async def collect_vms_async(
             vcenter_config['username'] if vcenter_config else None,
             vcenter_config['password'] if vcenter_config else None,
             vcenter_config['port'] if vcenter_config else None,
+            default_site,
+            default_zone,
             request.batch_size,
             request.max_processes
         )
@@ -733,15 +749,15 @@ async def delete_all_missing_vms_from_db():
 @router.get("/vm/{identifier}")
 async def get_vm_by_identifier(identifier: str):
     """
-    Get single VM by UUID or MobID
+    Get single VM by UUID or vmid
     """
     try:
         # First try UUID
         vm = await database_service.get_vm_by_uuid(identifier)
         
-        # If not found by UUID, try MobID
+        # If not found by UUID, try vmid
         if not vm:
-            vm = await database_service.get_vm_by_mobid(identifier)
+            vm = await database_service.get_vm_by_vmid(identifier)
         
         if not vm:
             raise HTTPException(

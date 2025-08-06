@@ -76,7 +76,7 @@ class DatabaseService:
             operations = []
             for vm_data in vm_data_list:
                 # Filter query
-                filter_query = {'uuid': vm_data['uuid']} if vm_data.get('uuid') else {'mobid': vm_data['mobid']}
+                filter_query = {'uuid': vm_data['uuid']} if vm_data.get('uuid') else {'vmid': vm_data['vmid']}
                 
                 operation = UpdateOne(
                     filter_query,
@@ -162,18 +162,18 @@ class DatabaseService:
             logger.error(f"Error searching VM by UUID {uuid}: {e}")
             return None
     
-    async def get_vm_by_mobid(self, mobid: str) -> Optional[Dict[str, Any]]:
-        """Find VM by MobID"""
+    async def get_vm_by_vmid(self, vmid: str) -> Optional[Dict[str, Any]]:
+        """Find VM by vmid"""
         try:
             collection = await get_async_collection()
-            vm = await collection.find_one({'mobid': mobid})
+            vm = await collection.find_one({'vmid': vmid})
             
             if vm and '_id' in vm:
                 del vm['_id']
             
             return vm
         except Exception as e:
-            logger.error(f"Error searching VM by MobID {mobid}: {e}")
+            logger.error(f"Error searching VM by vmid {vmid}: {e}")
             return None
     
     async def search_vms(self, query: str, limit: int = 100) -> List[Dict[str, Any]]:

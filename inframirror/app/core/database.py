@@ -44,7 +44,7 @@ def init_database():
         
         # Index'lər yarat
         collection.create_index("uuid", unique=True, sparse=True)
-        collection.create_index("mobid", unique=True)
+        collection.create_index("vmid", unique=True)
         collection.create_index("name")
         collection.create_index("last_updated")
         

@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { 
   RefreshCw, 
   Server, 
-  Settings
+  Settings,
+  AlertTriangle
 } from 'lucide-react';
 
 // Components
@@ -13,15 +14,21 @@ import VMSummaryTab from './components/tabs/VMSummaryTab';
 import MissingVMsTab from './components/tabs/MissingVMsTab';
 import JiraAssetsTab from './components/tabs/JiraAssetsTab';
 import LogsTab from './components/tabs/LogsTab';
-import VMDetailsModal from './components/modals/VMDetailsModal';
+import EnhancedVMDetailsModal from './components/modals/EnhancedVMDetailsModal';
 import ConfigModal from './components/modals/ConfigModal';
 import PostingModal from './components/modals/PostingModal';
 
 // Hooks
 import { useApi } from './hooks/useApi';
+import { useConfig } from './hooks/useConfig';
+
+
+
+
 
 const VMwareCollectorApp = () => {
   const { loading, setLoadingState, apiCall, addLog } = useApi();
+  const { config, setConfig, isConfigComplete, isConfigLoaded, getApiConfig } = useConfig();
   
   // State
   const [data, setData] = useState({
@@ -59,21 +66,12 @@ const VMwareCollectorApp = () => {
   // Missing VMs specific states
   const [statusFilter, setStatusFilter] = useState('all');
 
-  const [config, setConfig] = useState({
-    jira: {
-      api_url: 'https://jira-support.company.com/rest/insight/1.0/object/navlist/iql',
-      token: '',
-      create_url: 'https://jira-support.company.com/rest/insight/1.0/object/create',
-      object_type_id: '3191',
-      object_schema_id: '242'
-    },
-    vcenter: {
-      host: 'kb-bnk-bmdc-vc1.company.com',
-      username: '',
-      password: '',
-      port: 443
+  // Show config modal if configuration is incomplete on first load
+  useEffect(() => {
+    if (isConfigLoaded && !isConfigComplete()) {
+      setShowConfigModal(true);
     }
-  });
+  }, [isConfigLoaded, isConfigComplete]);
 
   // Load dashboard data
   const loadDashboardData = async () => {
@@ -138,27 +136,53 @@ const VMwareCollectorApp = () => {
     }
   };
 
-  // Collect vCenter VMs
+  // Collect vCenter VMs with configuration
   const collectVCenterVMs = async () => {
     setLoadingState('vcenter', true);
-    addLog('Starting vCenter VM collection...', 'info', logs, setLogs);
+    
+    // ✅ YENİ - Enhanced log message
+    let logMessage = 'Starting vCenter VM collection...';
+    if (config.vcenter.default_site || config.vcenter.default_zone) {
+      const defaults = [];
+      if (config.vcenter.default_site) defaults.push(`Site: ${config.vcenter.default_site}`);
+      if (config.vcenter.default_zone) defaults.push(`Zone: ${config.vcenter.default_zone}`);
+      logMessage += ` (Default tags: ${defaults.join(', ')})`;
+    }
+    addLog(logMessage, 'info', logs, setLogs);
     
     try {
+      // ✅ YENİ - Enhanced request payload with default Site/Zone
+      const requestPayload = {
+        vcenter_config: {
+          host: config.vcenter.host,
+          username: config.vcenter.username,
+          password: config.vcenter.password,
+          port: config.vcenter.port,
+          // ✅ YENİ - Default Site və Zone dəyərləri əlavə et
+          default_site: config.vcenter.default_site || null,
+          default_zone: config.vcenter.default_zone || null
+        },
+        batch_size: 50,
+        max_processes: 8
+      };
+
+      // ✅ YENİ - Debug log for payload
+      if (config.vcenter.default_site || config.vcenter.default_zone) {
+        addLog(`Configured defaults will be applied to VMs without tags`, 'info', logs, setLogs);
+      }
+
       const response = await apiCall('/api/v1/collect-vms', {
         method: 'POST',
-        body: JSON.stringify({
-          vcenter_config: {
-            host: config.vcenter.host,
-            username: config.vcenter.username,
-            password: config.vcenter.password,
-            port: config.vcenter.port
-          },
-          batch_size: 50,
-          max_processes: 8
-        })
+        body: JSON.stringify(requestPayload)
       }, logs, setLogs);
       
-      addLog(`vCenter collection completed: ${response.processed_vms} VMs processed`, 'success', logs, setLogs);
+      // ✅ YENİ - Enhanced success message
+      let successMessage = `vCenter collection completed: ${response.processed_vms} VMs processed`;
+      if (response.default_applied && response.default_applied > 0) {
+        successMessage += `, ${response.default_applied} VMs received default Site/Zone tags`;
+      }
+      
+      addLog(successMessage, 'success', logs, setLogs);
       loadDashboardData();
     } catch (error) {
       addLog('vCenter collection failed', 'error', logs, setLogs);
@@ -167,21 +191,24 @@ const VMwareCollectorApp = () => {
     }
   };
 
-  // Collect Jira VMs
+
+  // Collect Jira VMs with configuration
   const collectJiraVMs = async () => {
+    if (!isConfigComplete()) {
+      addLog('Configuration incomplete. Please configure Jira settings first.', 'error', logs, setLogs);
+      setShowConfigModal(true);
+      return;
+    }
+
     setLoadingState('jira', true);
     addLog('Starting Jira VM collection...', 'info', logs, setLogs);
     
     try {
+      const apiConfig = getApiConfig();
       const response = await apiCall('/api/v1/collect-jira-vms', {
         method: 'POST',
         body: JSON.stringify({
-          jira_config: {
-            api_url: config.jira.api_url,
-            token: config.jira.token,
-            object_type_id: config.jira.object_type_id,
-            object_schema_id: config.jira.object_schema_id
-          },
+          jira_config: apiConfig.jira_config,
           batch_size: 50,
           max_processes: 8
         })
@@ -196,21 +223,67 @@ const VMwareCollectorApp = () => {
     }
   };
 
-  // Process VM Diff
+  const collectVCenterVMsAsync = async () => {
+    setLoadingState('vcenterAsync', true);
+    
+    let logMessage = 'Starting vCenter VM collection (async)...';
+    if (config.vcenter.default_site || config.vcenter.default_zone) {
+      const defaults = [];
+      if (config.vcenter.default_site) defaults.push(`Site: ${config.vcenter.default_site}`);
+      if (config.vcenter.default_zone) defaults.push(`Zone: ${config.vcenter.default_zone}`);
+      logMessage += ` (Default tags: ${defaults.join(', ')})`;
+    }
+    addLog(logMessage, 'info', logs, setLogs);
+    
+    try {
+      const requestPayload = {
+        vcenter_config: {
+          host: config.vcenter.host,
+          username: config.vcenter.username,
+          password: config.vcenter.password,
+          port: config.vcenter.port,
+          default_site: config.vcenter.default_site || null,
+          default_zone: config.vcenter.default_zone || null
+        },
+        batch_size: 50,
+        max_processes: 8
+      };
+
+      const response = await apiCall('/api/v1/collect-vms-async', {
+        method: 'POST',
+        body: JSON.stringify(requestPayload)
+      }, logs, setLogs);
+      
+      let asyncMessage = response.message;
+      if (config.vcenter.default_site || config.vcenter.default_zone) {
+        asyncMessage += ' Default Site/Zone tags will be applied where needed.';
+      }
+      
+      addLog(asyncMessage, 'success', logs, setLogs);
+    } catch (error) {
+      addLog('vCenter async collection failed', 'error', logs, setLogs);
+    } finally {
+      setLoadingState('vcenterAsync', false);
+    }
+  };
+
+  // Process VM Diff with configuration
   const processVMDiff = async () => {
+    if (!isConfigComplete()) {
+      addLog('Configuration incomplete. Please configure Jira settings first.', 'error', logs, setLogs);
+      setShowConfigModal(true);
+      return;
+    }
+
     setLoadingState('diff', true);
     addLog('Starting VM diff processing (IP-only matching)...', 'info', logs, setLogs);
     
     try {
+      const apiConfig = getApiConfig();
       const response = await apiCall('/api/v1/process-vm-diff', {
         method: 'POST',
         body: JSON.stringify({
-          jira_config: {
-            api_url: config.jira.api_url,
-            token: config.jira.token,
-            object_type_id: config.jira.object_type_id,
-            object_schema_id: config.jira.object_schema_id
-          }
+          jira_config: apiConfig.jira_config
         })
       }, logs, setLogs);
       
@@ -223,18 +296,27 @@ const VMwareCollectorApp = () => {
     }
   };
 
-  // Post to Jira
+  // Post to Jira with configuration
   const postToJira = async () => {
+    if (!isConfigComplete()) {
+      addLog('Configuration incomplete. Please configure Jira settings first.', 'error', logs, setLogs);
+      setShowConfigModal(true);
+      return;
+    }
+
     setLoadingState('jiraPost', true);
     addLog('Starting Jira Asset posting...', 'info', logs, setLogs);
     
     try {
+      const apiConfig = getApiConfig();
       const response = await apiCall('/api/v1/post-to-jira', {
         method: 'POST',
         body: JSON.stringify({
           jira_config: {
-            jira_token: config.jira.token,
-            create_url: config.jira.create_url,
+            jira_token: apiConfig.jira_config.token,
+            create_url: apiConfig.jira_config.create_url,
+            object_type_id: config.jira.object_type_id,
+            object_schema_id: config.jira.object_schema_id,
             delay_seconds: 1.0
           },
           limit: 10,
@@ -311,7 +393,7 @@ const VMwareCollectorApp = () => {
     }
   };
 
-  // Show VM details modal
+  // Show VM details modal with enhanced data
   const showVMDetails = (vm, source) => {
     setSelectedVM({...vm, source});
     setShowVMModal(true);
@@ -328,7 +410,7 @@ const VMwareCollectorApp = () => {
     setCurrentPage(1);
   };
 
-  // Enhanced load missing VMs function
+  // Enhanced load missing VMs function with pagination fix
   const loadMissingVMs = async () => {
     setLoadingState('missingVMs', true);
     try {
@@ -417,10 +499,16 @@ const VMwareCollectorApp = () => {
     setSelectAll(isSelected);
   };
 
-  // Enhanced posting function
+  // Enhanced posting function with configuration
   const postSelectedVMsToJira = async () => {
     if (selectedVMIds.size === 0) {
       addLog('No VMs selected for posting', 'warning', logs, setLogs);
+      return;
+    }
+
+    if (!isConfigComplete()) {
+      addLog('Configuration incomplete. Please configure Jira settings first.', 'error', logs, setLogs);
+      setShowConfigModal(true);
       return;
     }
 
@@ -428,12 +516,15 @@ const VMwareCollectorApp = () => {
     addLog(`Starting Jira Asset posting for ${selectedVMIds.size} selected VMs...`, 'info', logs, setLogs);
     
     try {
+      const apiConfig = getApiConfig();
       const response = await apiCall('/api/v1/post-selected-vms-to-jira', {
         method: 'POST',
         body: JSON.stringify({
           jira_config: {
-            jira_token: config.jira.token,
-            create_url: config.jira.create_url,
+            jira_token: apiConfig.jira_config.token,
+            create_url: apiConfig.jira_config.create_url,
+            object_type_id: config.jira.object_type_id,
+            object_schema_id: config.jira.object_schema_id,
             delay_seconds: 1.0
           },
           vm_ids: Array.from(selectedVMIds),
@@ -488,8 +579,10 @@ const VMwareCollectorApp = () => {
 
   // Initial load
   useEffect(() => {
-    loadDashboardData();
-  }, []);
+    if (isConfigLoaded) {
+      loadDashboardData();
+    }
+  }, [isConfigLoaded]);
 
   // Load VMs when dependencies change
   useEffect(() => {
@@ -528,7 +621,15 @@ const VMwareCollectorApp = () => {
                 <p className="text-sm text-gray-600">vCenter & Jira Asset Management Integration</p>
               </div>
             </div>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-3">
+              {/* Configuration Status Indicator */}
+              {!isConfigComplete() && (
+                <div className="flex items-center gap-2 px-3 py-2 bg-orange-100 text-orange-800 rounded-lg text-sm">
+                  <AlertTriangle className="w-4 h-4" />
+                  Configuration Required
+                </div>
+              )}
+              
               <LoadingButton
                 loading={loading.dashboard}
                 onClick={loadDashboardData}
@@ -540,7 +641,11 @@ const VMwareCollectorApp = () => {
               
               <button
                 onClick={() => setShowConfigModal(true)}
-                className="px-4 py-2 rounded-lg flex items-center gap-2 font-medium bg-gray-600 hover:bg-gray-700 text-white transition-colors"
+                className={`px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors ${
+                  !isConfigComplete() 
+                    ? 'bg-orange-600 hover:bg-orange-700 text-white'
+                    : 'bg-gray-600 hover:bg-gray-700 text-white'
+                }`}
               >
                 <Settings className="w-4 h-4" />
                 Configuration
@@ -586,6 +691,9 @@ const VMwareCollectorApp = () => {
             collectJiraVMs={collectJiraVMs}
             processVMDiff={processVMDiff}
             postToJira={postToJira}
+            isConfigComplete={isConfigComplete}
+            onConfigClick={() => setShowConfigModal(true)}
+            config={config} 
           />
         )}
 
@@ -652,7 +760,7 @@ const VMwareCollectorApp = () => {
       </main>
 
       {/* Modals */}
-      <VMDetailsModal
+      <EnhancedVMDetailsModal
         selectedVM={selectedVM}
         showVMModal={showVMModal}
         setShowVMModal={setShowVMModal}
