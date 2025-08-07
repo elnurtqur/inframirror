@@ -82,7 +82,7 @@ const JiraAssetsTab = ({ data }) => {
                       </div>
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
-                      <VMIDCard vmid={asset.vm_summary?.vmid || asset.debug_info?.vmid} size="xs" />
+                      <VMIDCard vm={asset} size="xs" />
                     </td>
                     <td className="px-6 py-4 text-sm">
                       <a 

@@ -5,12 +5,27 @@ import SortableHeader from '../common/SortableHeader';
 import Pagination from '../common/Pagination';
 
 // VMID Badge komponenti
-const VMIDCard = ({ vmid, size = 'xs' }) => {
+const VMIDCard = ({ vm, size = 'xs' }) => {
   const sizeClasses = {
     xs: 'px-2 py-1 text-xs',
     sm: 'px-3 py-1.5 text-sm', 
     md: 'px-4 py-2 text-base'
   };
+
+  // ✅ YENİ - VMID-ni müxtəlif field-lardan tap
+  const getVMID = () => {
+    if (!vm) return null;
+    
+    // Mümkün VMID field-ları siyahısı (prioritet sırası ilə)
+    return vm.VMID ||           // Jira-dan gələn böyük hərflər
+           vm.vmid ||           // vCenter-dən gələn kiçik hərflər  
+           vm.vm_id ||          // alternativ naming
+           vm.vm_summary?.vmid || vm.vm_summary?.VMID || // vm_summary içində
+           vm.debug_info?.vmid || vm.debug_info?.VMID || // debug_info içində
+           null;
+  };
+
+  const vmid = getVMID();
 
   if (!vmid || vmid === 'N/A') {
     return (
@@ -199,7 +214,7 @@ const VMSummaryTab = ({
                     {vm.name || vm.vm_name}
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">
-                    <VMIDCard vmid={vm.vmid || vm.vm_summary?.vmid} size="xs" />
+                    <VMIDCard vm={vm} size="xs" />
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500">
                     {vm.ip_address || 'N/A'}

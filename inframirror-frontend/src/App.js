@@ -745,6 +745,7 @@ const VMwareCollectorApp = () => {
             showVMDetails={showVMDetails}
             currentPage={currentPage}
             handlePageChange={handlePageChange}
+            
           />
         )}
 

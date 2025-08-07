@@ -5,11 +5,9 @@ import {
   RefreshCw, 
   HardDrive, 
   Eye, 
-  AlertCircle, 
-  CheckCircle,
+  AlertCircle,
   ChevronLeft,
-  ChevronRight,
-  X
+  ChevronRight
 } from 'lucide-react';
 import LoadingButton from '../common/LoadingButton';
 import SortableHeader from '../common/SortableHeader';
@@ -71,7 +69,10 @@ const MissingVMsTab = ({
   handleSort,
   showVMDetails,
   currentPage,
-  handlePageChange
+  handlePageChange,
+  // ✅ YENİ - əlavə edilən prop-lar
+  setSelectedVMIds,
+  setSelectAll
 }) => {
   return (
     <div className="space-y-6">
@@ -290,7 +291,7 @@ const MissingVMsTab = ({
                       </div>
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
-                      <VMIDCard vmid={vm.vm_summary?.vmid || vm.debug_info?.vmid} size="xs" />
+                      <VMIDCard vm={vm} size="xs" />
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-500">
                       {vm.vm_summary?.ip || 'N/A'}
