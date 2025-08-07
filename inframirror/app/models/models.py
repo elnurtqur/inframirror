@@ -122,7 +122,10 @@ class JiraVirtualMachine(BaseModel):
     
     # Required fields
     name: str = Field(..., description="VM name")
-    
+
+    vmid: Optional[str] = Field(None, description="VM ID (primary)")
+    VMID: Optional[str] = Field(None, description="VM ID (uppercase variant)")
+    vm_id: Optional[str] = Field(None, description="VM ID (underscore variant)")
     # Jira specific fields
     jira_object_id: Optional[Union[int, str]] = None
     jira_object_key: Optional[str] = None
@@ -185,6 +188,13 @@ class JiraVirtualMachine(BaseModel):
         # Allow extra fields that might come from Jira
         extra = "ignore"
 
+
+    @validator('VMID', 'vm_id', pre=True, always=True)
+    def sync_vmid_variants(cls, v, values):
+        """Synchronize VMID variants - use primary vmid if others are empty"""
+        if v:
+            return v
+        return values.get('vmid')
     # VALIDATORS - Convert string numbers to proper types
     @validator('cpu_count', pre=True)
     def validate_cpu_count(cls, v):
@@ -279,7 +289,23 @@ class JiraVirtualMachine(BaseModel):
         json_encoders = {
             datetime: lambda dt: dt.isoformat()
         }
+    def get_vmid(self) -> Optional[str]:
+        """Get VMID from any available variant"""
+        return self.vmid or self.VMID or self.vm_id or None
 
+    def get_vmid_display(self) -> str:
+        """Get VMID for display purposes with fallback"""
+        vmid = self.get_vmid()
+        if vmid:
+            return vmid
+        
+        # Fallback to object key or ID
+        if self.jira_object_key:
+            return f"KEY-{self.jira_object_key}"
+        elif self.jira_object_id:
+            return f"ID-{self.jira_object_id}"
+        else:
+            return "N/A"
 
 class MissingVM(BaseModel):
     """Missing VM model for VMs in vCenter but not in Jira"""

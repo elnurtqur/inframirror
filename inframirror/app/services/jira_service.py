@@ -165,9 +165,63 @@ class JiraService:
         except Exception as e:
             logger.error(f"Error retrieving VM objects: {e}")
             return []
-    
+
+    def extract_vmid_from_attributes(self, attribute_data: Dict[str, Any]) -> Optional[str]:
+        """✅ YENİ - Extract VMID from Jira attributes using multiple field mappings"""
+        
+        logger.debug(f"🔍 Searching for VMID in {len(attribute_data)} attributes")
+        
+        # Try all possible VMID field mappings
+        for field_mapping in self.vmid_field_mappings:
+            if field_mapping in attribute_data:
+                value = attribute_data[field_mapping]
+                
+                # Handle different value types
+                if isinstance(value, dict):
+                    # Reference object - get name, label, or value
+                    vmid = (value.get('name') or 
+                        value.get('label') or 
+                        value.get('value') or 
+                        value.get('object_key'))
+                elif isinstance(value, str) and value.strip():
+                    vmid = value.strip()
+                elif isinstance(value, (int, float)):
+                    vmid = str(value)
+                else:
+                    continue
+                
+                if vmid and str(vmid).strip():
+                    logger.info(f"✅ VMID found via field '{field_mapping}': {vmid}")
+                    return str(vmid).strip()
+        
+        # Fallback: Look for any field containing 'vmid' or 'id' in name
+        for attr_name, attr_value in attribute_data.items():
+            if attr_name and isinstance(attr_name, str):
+                attr_name_lower = attr_name.lower()
+                
+                # Check if field name contains vmid-related keywords
+                vmid_keywords = ['vmid', 'vm_id', 'virtualid', 'instanceid', 'mobid', 'objectid']
+                if any(keyword in attr_name_lower for keyword in vmid_keywords):
+                    if isinstance(attr_value, dict):
+                        vmid = (attr_value.get('name') or 
+                            attr_value.get('label') or 
+                            attr_value.get('value'))
+                    elif isinstance(attr_value, str) and attr_value.strip():
+                        vmid = attr_value.strip()
+                    elif isinstance(attr_value, (int, float)):
+                        vmid = str(attr_value)
+                    else:
+                        continue
+                    
+                    if vmid and str(vmid).strip():
+                        logger.info(f"✅ VMID found via fallback field '{attr_name}': {vmid}")
+                        return str(vmid).strip()
+        
+        logger.warning("❌ No VMID found in Jira attributes")
+        return None
+
     def extract_vm_data(self, jira_vm_object: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Extract structured data from Jira VM object"""
+        """Extract structured data from Jira VM object - ENHANCED WITH VMID"""
         try:
             vm_data = {
                 'jira_object_id': jira_vm_object.get('id'),
@@ -230,6 +284,22 @@ class JiraService:
                         else:
                             values.append(value_obj.get('value'))
                     attribute_data[attr_name] = values
+            
+            # ✅ YENİ - Extract VMID from attributes
+            vmid = self.extract_vmid_from_attributes(attribute_data)
+            if vmid:
+                vm_data['vmid'] = vmid
+                vm_data['VMID'] = vmid  # Also store as uppercase variant
+                vm_data['vm_id'] = vmid  # Also store as underscore variant
+                logger.info(f"VM {vm_data['name']}: VMID = {vmid}")
+            else:
+                # Generate fallback VMID from object key or ID
+                vmid = (vm_data.get('jira_object_key') or 
+                    f"JIRA-{vm_data.get('jira_object_id', 'Unknown')}")
+                vm_data['vmid'] = vmid
+                vm_data['VMID'] = vmid
+                vm_data['vm_id'] = vmid
+                logger.info(f"VM {vm_data['name']}: Generated fallback VMID = {vmid}")
             
             # Add structured data
             vm_data.update(attribute_data)
