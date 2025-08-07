@@ -1,33 +1,35 @@
+// File: inframirror-frontend/src/components/tabs/VMSummaryTab.js
+// Bu faylı bu kodla əvəz edin
+
 import React from 'react';
 import { Search, Filter, RefreshCw, Eye } from 'lucide-react';
 import LoadingButton from '../common/LoadingButton';
 import SortableHeader from '../common/SortableHeader';
 import Pagination from '../common/Pagination';
 
-// VMID Badge komponenti
-const VMIDCard = ({ vm, size = 'xs' }) => {
+// VMID Badge komponenti - enhanced for Jira data
+const VMIDCard = ({ vmid, jiraVmid, size = 'xs', source = 'vcenter' }) => {
   const sizeClasses = {
     xs: 'px-2 py-1 text-xs',
     sm: 'px-3 py-1.5 text-sm', 
     md: 'px-4 py-2 text-base'
   };
 
-  // ✅ YENİ - VMID-ni müxtəlif field-lardan tap
-  const getVMID = () => {
-    if (!vm) return null;
-    
-    // Mümkün VMID field-ları siyahısı (prioritet sırası ilə)
-    return vm.VMID ||           // Jira-dan gələn böyük hərflər
-           vm.vmid ||           // vCenter-dən gələn kiçik hərflər  
-           vm.vm_id ||          // alternativ naming
-           vm.vm_summary?.vmid || vm.vm_summary?.VMID || // vm_summary içində
-           vm.debug_info?.vmid || vm.debug_info?.VMID || // debug_info içində
-           null;
-  };
+  // ✅ ENHANCED: Jira VMs üçün VMID priority
+  let displayVmid = null;
+  let sourceIndicator = '';
+  
+  if (source === 'jira') {
+    // Jira VMs üçün önce VMID field-ə bax, sonra vmid field-ə
+    displayVmid = jiraVmid || vmid;
+    sourceIndicator = '(J)'; // Jira source indicator
+  } else {
+    // vCenter VMs üçün
+    displayVmid = vmid;
+    sourceIndicator = '(vC)'; // vCenter source indicator
+  }
 
-  const vmid = getVMID();
-
-  if (!vmid || vmid === 'N/A') {
+  if (!displayVmid || displayVmid === 'N/A') {
     return (
       <span className={`inline-flex items-center ${sizeClasses[size]} bg-gray-100 text-gray-400 rounded-lg border border-gray-200 italic`}>
         No ID
@@ -41,9 +43,10 @@ const VMIDCard = ({ vm, size = 'xs' }) => {
         <svg className="w-3 h-3 mr-1.5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
         </svg>
-        <span className="select-all" title={`VM ID: ${vmid}`}>{vmid}</span>
+        <span className="select-all" title={`VM ID (${source}): ${displayVmid}`}>{displayVmid}</span>
+        <span className="ml-1 text-xs text-blue-500 opacity-75">{sourceIndicator}</span>
         <button 
-          onClick={() => navigator.clipboard?.writeText(vmid)}
+          onClick={() => navigator.clipboard?.writeText(displayVmid)}
           className="ml-1.5 p-0.5 hover:bg-blue-200 rounded transition-colors"
           title="Copy VM ID"
         >
@@ -167,12 +170,13 @@ const VMSummaryTab = ({
                 <SortableHeader field="name" sortField={sortField} sortDirection={sortDirection} onSort={handleSort}>
                   VM Name
                 </SortableHeader>
-                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider min-w-[110px]">
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider min-w-[130px]">
                   <div className="flex items-center space-x-1">
                     <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
                     </svg>
                     <span>VM ID</span>
+                    <span className="text-xs text-gray-400">({vmDataSource === 'vcenter' ? 'vC' : 'J'})</span>
                   </div>
                 </th>
                 <SortableHeader field="ip_address" sortField={sortField} sortDirection={sortDirection} onSort={handleSort}>
@@ -214,7 +218,13 @@ const VMSummaryTab = ({
                     {vm.name || vm.vm_name}
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">
-                    <VMIDCard vm={vm} size="xs" />
+                    {/* ✅ ENHANCED: Jira VMs üçün VMID field support */}
+                    <VMIDCard 
+                      vmid={vm.vmid} 
+                      jiraVmid={vm.VMID} 
+                      size="xs" 
+                      source={vmDataSource}
+                    />
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500">
                     {vm.ip_address || 'N/A'}
@@ -234,7 +244,15 @@ const VMSummaryTab = ({
                   )}
                   {vmDataSource === 'jira' && (
                     <td className="px-6 py-4 text-sm text-blue-600">
-                      {vm.jira_object_key}
+                      <a 
+                        href={`https://jira-support.company.com/browse/${vm.jira_object_key}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="hover:underline"
+                        title="Open in Jira"
+                      >
+                        {vm.jira_object_key}
+                      </a>
                     </td>
                   )}
                   <td className="px-6 py-4 text-sm text-gray-500">
@@ -257,6 +275,7 @@ const VMSummaryTab = ({
                     <button
                       onClick={() => showVMDetails(vm, vmDataSource)}
                       className="text-blue-600 hover:text-blue-800"
+                      title="View Details"
                     >
                       <Eye className="w-4 h-4" />
                     </button>
