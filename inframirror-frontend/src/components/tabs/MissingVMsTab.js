@@ -193,7 +193,7 @@ const MissingVMsTab = ({
         <div className="p-6 border-b">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-lg font-semibold text-orange-700">Missing VMs ({data.missingVMs.length})</h3>
+              <h3 className="text-lg font-semibold text-orange-700">Missing VMs ({data.totalMissingCount})</h3>
               <p className="text-sm text-gray-600 mt-1">
                 VMs found in vCenter but missing from Jira Asset Management
               </p>
@@ -291,7 +291,10 @@ const MissingVMsTab = ({
                       </div>
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
-                      <VMIDCard vm={vm} size="xs" />
+                      <VMIDCard
+                        vmid={vm.vmid || vm.vm_summary?.vmid || vm.debug_info?.vcenter_vmid}
+                        size="xs"
+                      />
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-500">
                       {vm.vm_summary?.ip || 'N/A'}
@@ -345,7 +348,7 @@ const MissingVMsTab = ({
               <RefreshCw className="w-8 h-8 animate-spin mx-auto mb-4" />
               <p className="text-lg font-medium mb-2">Loading missing VMs...</p>
             </div>
-          ) : data.missingVMs.length === 0 ? (
+          ) : data.totalMissingCount === 0 ? (
             <div className="text-center py-12 text-gray-500">
               <AlertCircle className="w-12 h-12 mx-auto mb-4 text-gray-400" />
               <p className="text-lg font-medium mb-2">No missing VMs found</p>
@@ -359,7 +362,7 @@ const MissingVMsTab = ({
           <div className="flex items-center justify-between px-6 py-4 bg-white border-t">
             <div className="flex items-center space-x-4">
               <span className="text-sm text-gray-700">
-                Showing {Math.min((currentPage - 1) * itemsPerPage + 1, data.missingVMs.length)}-{Math.min(currentPage * itemsPerPage, data.missingVMs.length)} of {data.missingVMs.length} results
+                Showing {Math.min((currentPage - 1) * itemsPerPage + 1, data.totalMissingCount)}-{Math.min(currentPage * itemsPerPage, data.totalMissingCount)} of {data.totalMissingCount} results
               </span>
             </div>
             
@@ -374,7 +377,7 @@ const MissingVMsTab = ({
               
               {/* Page numbers */}
               {(() => {
-                const totalPages = Math.ceil(data.missingVMs.length / itemsPerPage);
+                const totalPages = Math.ceil(data.totalMissingCount / itemsPerPage);
                 const pages = [];
                 const maxPages = 5;
                 
@@ -406,7 +409,7 @@ const MissingVMsTab = ({
               
               <button
                 onClick={() => handlePageChange(currentPage + 1)}
-                disabled={currentPage * itemsPerPage >= data.missingVMs.length}
+                disabled={currentPage >= Math.ceil(data.totalMissingCount / itemsPerPage)}
                 className="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronRight className="w-4 h-4" />
