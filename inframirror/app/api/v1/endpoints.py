@@ -633,7 +633,7 @@ async def get_all_missing_vms_from_db(
     limit: int = Query(1000, ge=1, le=5000, description="Maximum number of VMs")
 ):
     """
-    Get all missing VMs from database (VMs in vCenter but not in Jira)
+    Get all missing VMs from database - ENHANCED WITH VMID SUPPORT
     """
     try:
         logger.info(f"Retrieving missing VMs from database (skip={skip}, limit={limit})")
@@ -641,21 +641,73 @@ async def get_all_missing_vms_from_db(
         vms = await database_service.get_all_missing_vms(skip, limit)
         total_count = await database_service.get_missing_vm_count()
         
-        # Convert to Pydantic models
+        # Convert to Pydantic models with VMID extraction
         vm_models = []
+        vmid_found_count = 0
+        
         for vm_data in vms:
             try:
-                vm_model = MissingVM(**vm_data)
+                # ✅ Extract VMID from missing VM data
+                vmid_value = None
+                
+                # Check multiple sources for VMID
+                vmid_sources = [
+                    # From vm_summary
+                    vm_data.get('vm_summary', {}).get('vmid'),
+                    vm_data.get('vm_summary', {}).get('VMID'),
+                    vm_data.get('vm_summary', {}).get('vm_id'),
+                    # From debug_info
+                    vm_data.get('debug_info', {}).get('vmid'),
+                    vm_data.get('debug_info', {}).get('VMID'),
+                    vm_data.get('debug_info', {}).get('vcenter_vmid'),
+                    vm_data.get('debug_info', {}).get('vcenter_mobid'),
+                    # Direct from root level
+                    vm_data.get('vmid'),
+                    vm_data.get('VMID'),
+                    vm_data.get('vm_id')
+                ]
+                
+                for source_value in vmid_sources:
+                    if source_value and str(source_value).strip():
+                        vmid_value = str(source_value).strip()
+                        vmid_found_count += 1
+                        logger.debug(f"Missing VM {vm_data.get('vm_name', 'Unknown')}: VMID = {vmid_value}")
+                        break
+                
+                if not vmid_value:
+                    logger.debug(f"Missing VM {vm_data.get('vm_name', 'Unknown')}: No VMID found")
+                
+                # ✅ Create MissingVM model with VMID
+                vm_model = MissingVM(
+                    vm_name=vm_data.get('vm_name', 'Unknown'),
+                    vmid=vmid_value,
+                    VMID=vmid_value,
+                    vm_id=vmid_value,
+                    jira_asset_payload=vm_data.get('jira_asset_payload', {}),
+                    debug_info=vm_data.get('debug_info', {}),
+                    vm_summary=vm_data.get('vm_summary', {}),
+                    status=vm_data.get('status', 'pending_creation'),
+                    created_date=vm_data.get('created_date', datetime.utcnow()),
+                    source=vm_data.get('source', 'vcenter_diff_processor')
+                )
                 vm_models.append(vm_model)
+                
             except Exception as e:
                 logger.warning(f"Missing VM model conversion error: {e}")
+                logger.debug(f"Failed missing VM data: {vm_data}")
                 continue
         
         logger.info(f"Retrieved {len(vm_models)} missing VMs")
+        logger.info(f"Missing VMs with VMID: {vmid_found_count}/{len(vm_models)} ({vmid_found_count/len(vm_models)*100 if len(vm_models) > 0 else 0:.1f}%)")
+        
+        # Enhanced response message
+        response_message = f"Retrieved {len(vm_models)} missing VMs"
+        if vmid_found_count > 0:
+            response_message += f" ({vmid_found_count} with VMID)"
         
         return MissingVMListResponse(
             status="success",
-            message=f"Retrieved {len(vm_models)} missing VMs",
+            message=response_message,
             total_count=total_count,
             vms=vm_models
         )
@@ -1319,7 +1371,7 @@ async def get_all_jira_vms_from_db(
         
         for i, vm_data in enumerate(vms):
             try:
-                # ✅ FIXED - Extract VMID from MongoDB raw data (case-sensitive)
+                # ✅ FIXED - Extract VMID ONLY if exists, NO fallback
                 vmid_value = None
                 
                 # Priority order for VMID extraction from raw MongoDB data
@@ -1340,15 +1392,11 @@ async def get_all_jira_vms_from_db(
                         logger.debug(f"VM {vm_data.get('name', 'Unknown')}: VMID = {vmid_value} (from field: {field_name})")
                         break
                 
-                # Fallback if no VMID found
+                # ✅ NO FALLBACK - If no VMID found, leave it as None
                 if not vmid_value:
-                    if vm_data.get('jira_object_id'):
-                        vmid_value = f"ITAM-{vm_data['jira_object_id']}"
-                    else:
-                        vmid_value = f"VM-{i}"
-                    logger.debug(f"VM {vm_data.get('name', 'Unknown')}: Generated fallback VMID = {vmid_value}")
+                    logger.debug(f"VM {vm_data.get('name', 'Unknown')}: No VMID found, leaving as None")
 
-                # ✅ FIXED - Process data with corrected field mapping
+                # ✅ FIXED - Process data (VMID will be None if not found)
                 processed_data = {
                     # Basic info - try multiple field variants from MongoDB
                     'name': (vm_data.get('name') or 
@@ -1356,80 +1404,62 @@ async def get_all_jira_vms_from_db(
                             vm_data.get('vm_name') or 
                             f"VM_{i}"),
                     
-                    # ✅ VMID fields (all variants set to same value)
-                    'vmid': vmid_value,
-                    'VMID': vmid_value, 
-                    'vm_id': vmid_value,
+                    # ✅ VMID fields (will be None if no real VMID found)
+                    'vmid': vmid_value,      # None if not found
+                    'VMID': vmid_value,      # None if not found
+                    'vm_id': vmid_value,     # None if not found
                     
-                    # Jira specific fields - try MongoDB raw fields first
+                    # ... rest of the fields remain the same ...
                     'jira_object_id': vm_data.get('jira_object_id'),
                     'jira_object_key': (vm_data.get('jira_object_key') or 
-                                       vm_data.get('Key')),              # ✅ MongoDB has "Key"
-                    'vm_name': (vm_data.get('VMName') or                # ✅ MongoDB has "VMName"
-                               vm_data.get('vm_name')),
-                    'dns_name': (vm_data.get('DNSName') or              # ✅ MongoDB has "DNSName"
+                                    vm_data.get('Key')),
+                    'vm_name': (vm_data.get('VMName') or
+                            vm_data.get('vm_name')),
+                    'dns_name': (vm_data.get('DNSName') or
                                 vm_data.get('dns_name')),
-                    
-                    # Network info - try MongoDB raw fields first
-                    'ip_address': (vm_data.get('IPAddress') or          # ✅ MongoDB has "IPAddress"
-                                  vm_data.get('ip_address')),
+                    'ip_address': (vm_data.get('IPAddress') or
+                                vm_data.get('ip_address')),
                     'secondary_ip': vm_data.get('secondary_ip'),
                     'secondary_ip2': vm_data.get('secondary_ip2'),
-                    
-                    # Hardware info - try MongoDB raw fields first  
-                    'cpu_count': (vm_data.get('CPU') or                 # ✅ MongoDB has "CPU": "24"
-                                 vm_data.get('cpu_count')),
-                    'memory_gb': (vm_data.get('Memory') or              # ✅ MongoDB has "Memory": "80"
-                                 vm_data.get('memory_gb')),
+                    'cpu_count': (vm_data.get('CPU') or
+                                vm_data.get('cpu_count')),
+                    'memory_gb': (vm_data.get('Memory') or
+                                vm_data.get('memory_gb')),
                     'memory_mb': vm_data.get('memory_mb'),
-                    'disk_gb': (vm_data.get('Disk') or                  # ✅ MongoDB has "Disk": "1600"
-                               vm_data.get('disk_gb')),
-                    
-                    # Infrastructure info - try MongoDB raw fields first
-                    'resource_pool': (vm_data.get('ResourcePool') or   # ✅ MongoDB has "ResourcePool"
-                                     vm_data.get('resource_pool')),
-                    'datastore': (vm_data.get('Datastore') or          # ✅ MongoDB has "Datastore"
-                                 vm_data.get('datastore')),
-                    'esxi_cluster': (vm_data.get('ESXiCluster') or     # ✅ MongoDB has "ESXiCluster"
-                                   vm_data.get('esxi_cluster')),
+                    'disk_gb': (vm_data.get('Disk') or
+                            vm_data.get('disk_gb')),
+                    'resource_pool': (vm_data.get('ResourcePool') or
+                                    vm_data.get('resource_pool')),
+                    'datastore': (vm_data.get('Datastore') or
+                                vm_data.get('datastore')),
+                    'esxi_cluster': (vm_data.get('ESXiCluster') or
+                                vm_data.get('esxi_cluster')),
                     'esxi_host': vm_data.get('esxi_host'),
-                    'esxi_port_group': (vm_data.get('ESXiPortGroup') or # ✅ MongoDB has "ESXiPortGroup"
-                                      vm_data.get('esxi_port_group')),
-                    
-                    # Management info - try MongoDB raw fields first
-                    'site': (vm_data.get('Site') or                    # ✅ MongoDB has "Site": "Main"
+                    'esxi_port_group': (vm_data.get('ESXiPortGroup') or
+                                    vm_data.get('esxi_port_group')),
+                    'site': (vm_data.get('Site') or
                             vm_data.get('site')),
                     'description': vm_data.get('description'),
                     'jira_ticket': vm_data.get('jira_ticket'),
                     'criticality_level': vm_data.get('criticality_level'),
                     'created_by': vm_data.get('created_by'),
-                    
-                    # System info - extract from reference objects or processed fields
                     'operating_system': (
                         vm_data.get('OperatingSystem', {}).get('name') if isinstance(vm_data.get('OperatingSystem'), dict) 
-                        else vm_data.get('operating_system')            # ✅ MongoDB has "OperatingSystem": {"name": "Linux"}
+                        else vm_data.get('operating_system')
                     ),
                     'platform': vm_data.get('platform'),
                     'kubernetes_cluster': vm_data.get('kubernetes_cluster'),
-                    
-                    # Backup info
                     'need_backup': vm_data.get('need_backup'),
                     'backup_type': vm_data.get('backup_type'),
                     'need_monitoring': vm_data.get('need_monitoring'),
-                    
-                    # User info - try MongoDB raw fields first
-                    'responsible_ttl': (vm_data.get('ResponsibleTTL') or # ✅ MongoDB has "ResponsibleTTL"
-                                       vm_data.get('responsible_ttl')),
-                    
-                    # Tags (already processed)
+                    'responsible_ttl': (vm_data.get('ResponsibleTTL') or
+                                    vm_data.get('responsible_ttl')),
                     'tags': vm_data.get('tags', []),
                     'tags_jira_asset': vm_data.get('tags_jira_asset', []),
-                    
-                    # Metadata - try MongoDB raw fields first
-                    'created_date': (vm_data.get('Created') or          # ✅ MongoDB has "Created"
-                                   vm_data.get('created_date')),
-                    'updated_date': (vm_data.get('Updated') or          # ✅ MongoDB has "Updated"  
-                                   vm_data.get('updated_date')),
+                    'created_date': (vm_data.get('Created') or
+                                vm_data.get('created_date')),
+                    'updated_date': (vm_data.get('Updated') or
+                                vm_data.get('updated_date')),
                     'last_updated': vm_data.get('last_updated'),
                     'data_source': vm_data.get('data_source', 'jira_asset_management')
                 }

@@ -867,8 +867,11 @@ class DiffService:
         
         return results
     
+    # File: app/services/diff_service.py
+    # UPDATE save_missing_vms_to_mongodb method to include VMID:
+
     def save_missing_vms_to_mongodb(self, missing_vms: Dict[str, Dict[str, Any]]) -> Dict[str, int]:
-        """Save missing VMs to MongoDB in Jira Asset format with dynamic schema"""
+        """Save missing VMs to MongoDB with VMID support"""
         try:
             self.get_collections()
             
@@ -876,19 +879,50 @@ class DiffService:
             processed_count = 0
             error_count = 0
             
-            logger.info(f"📝 Saving {len(missing_vms)} missing VMs with schema {self.current_object_schema_id}")
+            logger.info(f"📝 Saving {len(missing_vms)} missing VMs with VMID support")
             
             for vm_name, vm_data in missing_vms.items():
                 try:
                     payload_data = self.create_jira_asset_payload(vm_data)
                     
                     if payload_data:
-                        # Create MongoDB document
+                        # ✅ Extract VMID from vCenter VM data
+                        vmid_value = None
+                        vmid_sources = [
+                            vm_data.get('vmid'),
+                            vm_data.get('VMID'), 
+                            vm_data.get('vm_id'),
+                            vm_data.get('mobid'),  # vCenter MobID
+                            payload_data.get('vm_data_summary', {}).get('vmid')
+                        ]
+                        
+                        for source_value in vmid_sources:
+                            if source_value and str(source_value).strip():
+                                vmid_value = str(source_value).strip()
+                                logger.debug(f"Missing VM {vm_name}: Found VMID = {vmid_value}")
+                                break
+                        
+                        if not vmid_value:
+                            logger.debug(f"Missing VM {vm_name}: No VMID found in vCenter data")
+                        
+                        # ✅ Enhanced vm_summary with VMID
+                        enhanced_vm_summary = payload_data['vm_data_summary'].copy()
+                        enhanced_vm_summary['vmid'] = vmid_value
+                        
+                        # ✅ Enhanced debug_info with VMID
+                        enhanced_debug_info = payload_data['debug_info'].copy()
+                        enhanced_debug_info['vcenter_vmid'] = vmid_value
+                        enhanced_debug_info['vcenter_mobid'] = vm_data.get('mobid')
+                        
+                        # Create MongoDB document with VMID
                         document = {
                             'vm_name': vm_name,
+                            'vmid': vmid_value,  # ✅ Add VMID at root level
+                            'VMID': vmid_value,
+                            'vm_id': vmid_value,
                             'jira_asset_payload': payload_data['jira_payload'],
-                            'debug_info': payload_data['debug_info'],
-                            'vm_summary': payload_data['vm_data_summary'],
+                            'debug_info': enhanced_debug_info,
+                            'vm_summary': enhanced_vm_summary,
                             'status': 'pending_creation',
                             'created_date': datetime.utcnow(),
                             'source': 'vcenter_diff_processor_ip_only',
@@ -907,6 +941,11 @@ class DiffService:
                         operations.append(operation)
                         processed_count += 1
                         
+                        if vmid_value:
+                            logger.info(f"✅ Missing VM {vm_name}: Added with VMID = {vmid_value}")
+                        else:
+                            logger.info(f"⚠️ Missing VM {vm_name}: Added without VMID")
+                            
                     else:
                         error_count += 1
                         logger.warning(f"Failed to create payload for VM: {vm_name}")
@@ -920,7 +959,7 @@ class DiffService:
                 try:
                     result = self.missing_collection.bulk_write(operations, ordered=False)
                     logger.info(f"✅ MongoDB bulk write: {result.upserted_count} new, {result.modified_count} updated")
-                    logger.info(f"📊 Schema {self.current_object_schema_id}: {processed_count} VMs processed")
+                    logger.info(f"📊 Schema {self.current_object_schema_id}: {processed_count} VMs processed with VMID support")
                 except BulkWriteError as e:
                     logger.error(f"Bulk write error: {e}")
                     logger.info(f"Partial success: {e.details.get('nUpserted', 0)} upserted, {e.details.get('nModified', 0)} modified")

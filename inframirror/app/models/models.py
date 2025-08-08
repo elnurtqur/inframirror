@@ -310,6 +310,12 @@ class JiraVirtualMachine(BaseModel):
 class MissingVM(BaseModel):
     """Missing VM model for VMs in vCenter but not in Jira"""
     vm_name: str
+    
+    # ✅ ADD VMID fields to MissingVM
+    vmid: Optional[str] = Field(None, description="VM ID from vCenter")
+    VMID: Optional[str] = Field(None, description="VM ID (uppercase variant)")
+    vm_id: Optional[str] = Field(None, description="VM ID (underscore variant)")
+    
     jira_asset_payload: Dict[str, Any]
     debug_info: Dict[str, Any]
     vm_summary: Dict[str, Any]
@@ -322,7 +328,23 @@ class MissingVM(BaseModel):
         json_encoders = {
             datetime: lambda dt: dt.isoformat()
         }
+    
+    # ✅ ADD VMID helper methods
+    @validator('VMID', 'vm_id', pre=True, always=True)
+    def sync_vmid_variants(cls, v, values):
+        """Synchronize VMID variants"""
+        if v:
+            return v
+        return values.get('vmid')
+    
+    def get_vmid(self) -> Optional[str]:
+        """Get VMID from any available variant"""
+        return self.vmid or self.VMID or self.vm_id or None
 
+    def get_vmid_display(self) -> str:
+        """Get VMID for display purposes"""
+        vmid = self.get_vmid()
+        return vmid if vmid else ""
 
 class VCenterConfig(BaseModel):
     """vCenter configuration model"""
