@@ -422,28 +422,35 @@ class VCenterService:
             for tag in raw_tags:
                 category_name = tag.get('category_name')
                 tag_name = tag.get('tag_name')
-                
+
                 if category_name and tag_name:
                     processed_tags[category_name] = tag_name
-            
+
+            # Default dəyərləri tətbiq et
+            if self.default_site and 'Site' not in processed_tags:
+                processed_tags['Site'] = self.default_site
+            if self.default_zone and 'Zone' not in processed_tags:
+                processed_tags['Zone'] = self.default_zone
+
             if processed_tags:
                 vm_data['tags'] = [processed_tags]
-                
+
                 # Jira Asset tag mapping
                 jira_tags = {}
                 tag_mapping = {
                     'Systems': 'System',
                     'Zone': 'Zone',
+                    'Site': 'Site',
                     'ComponentName': 'Component',
                     'VmEnvironment': 'Environment',
                     'Tribes': 'Tribe',
                     'Squads': 'Squad'
                 }
-                
+
                 for original_key, jira_key in tag_mapping.items():
                     if original_key in processed_tags:
                         jira_tags[jira_key] = processed_tags[original_key]
-                
+
                 vm_data['tags_jira_asset'] = [jira_tags] if jira_tags else []
             else:
                 vm_data['tags'] = []
