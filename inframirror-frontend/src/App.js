@@ -745,7 +745,8 @@ const VMwareCollectorApp = () => {
             showVMDetails={showVMDetails}
             currentPage={currentPage}
             handlePageChange={handlePageChange}
-            
+            setSelectedVMIds={setSelectedVMIds}
+            setSelectAll={setSelectAll}
           />
         )}
 
