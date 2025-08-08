@@ -440,6 +440,7 @@ class VCenterService:
                 tag_mapping = {
                     'Systems': 'System',
                     'Zone': 'Zone',
+                    'Site': 'Site',
                     'ComponentName': 'Component',
                     'VmEnvironment': 'Environment',
                     'Tribes': 'Tribe',
