@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = 'https://api.inframirror.kapitalbank.az';
 
 export const useApi = () => {
   const [loading, setLoading] = useState({});
